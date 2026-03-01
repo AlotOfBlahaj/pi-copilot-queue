@@ -89,6 +89,52 @@ void test("interactive input during active run is queued instead of sent", async
   assert.equal(toolResult.details.source, "queue");
 });
 
+void test("copilot waits when empty and resumes when new queue item is added", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  assert.ok(captured.commandHandler);
+  assert.ok(captured.toolExecute);
+
+  const waitingResultPromise = captured.toolExecute?.(
+    "call-1",
+    { prompt: "Need your next instruction" },
+    undefined,
+    undefined,
+    createToolCtx({ hasUI: true })
+  ) as Promise<{ content: { type: string; text: string }[]; details: { source: string } }>;
+
+  await Promise.resolve();
+  await captured.commandHandler?.("add continue with final polish", createCommandCtx());
+
+  const waitingResult = await waitingResultPromise;
+  assert.equal(waitingResult.content[0]?.text, "continue with final polish");
+  assert.equal(waitingResult.details.source, "queue-live");
+});
+
+void test("done command releases waiting ask_user", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  assert.ok(captured.commandHandler);
+  assert.ok(captured.toolExecute);
+
+  const waitingResultPromise = captured.toolExecute?.(
+    "call-1",
+    { prompt: "Need your next instruction" },
+    undefined,
+    undefined,
+    createToolCtx({ hasUI: true })
+  ) as Promise<{ content: { type: string; text: string }[]; details: { source: string } }>;
+
+  await Promise.resolve();
+  await captured.commandHandler?.("done", createCommandCtx());
+
+  const waitingResult = await waitingResultPromise;
+  assert.equal(waitingResult.content[0]?.text, "done");
+  assert.equal(waitingResult.details.source, "done");
+});
+
 void test("does not inject ask_user policy for non-copilot provider", () => {
   const captured = createCaptured();
   extension(createPi(captured));
@@ -247,9 +293,9 @@ function createCommandCtx() {
   };
 }
 
-function createToolCtx(options?: { provider?: string }) {
+function createToolCtx(options?: { provider?: string; hasUI?: boolean }) {
   return {
-    hasUI: false,
+    hasUI: options?.hasUI ?? false,
     model: { provider: options?.provider ?? "github-copilot" },
     ui: {
       input: () => Promise.resolve(undefined),

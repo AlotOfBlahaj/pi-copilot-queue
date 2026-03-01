@@ -12,12 +12,32 @@ import {
 import { buildHelpText, parseCommand } from "./commands.js";
 import type { QueueState } from "./types.js";
 
+const DONE_RESPONSE = "done";
+
 export default function copilotQueueExtension(pi: ExtensionAPI) {
   let state: QueueState = initialState();
+  let pendingAskUserResolve: ((text: string) => void) | undefined;
+
+  function hasPendingAskUser(): boolean {
+    return Boolean(pendingAskUserResolve);
+  }
+
+  function resolvePendingAskUser(
+    text: string,
+    ctx: { hasUI: boolean; ui: { setStatus: (key: string, text?: string) => void } }
+  ): boolean {
+    if (!pendingAskUserResolve) return false;
+
+    const resolve = pendingAskUserResolve;
+    pendingAskUserResolve = undefined;
+    updateStatus(ctx, state, false);
+    resolve(text);
+    return true;
+  }
 
   function syncState(ctx: Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui">): void {
     state = restoreFromContext(ctx);
-    updateStatus(ctx, state);
+    updateStatus(ctx, state, hasPendingAskUser());
   }
 
   pi.on("session_start", (_event, ctx) => syncState(ctx));
@@ -53,9 +73,14 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       return { action: "handled" };
     }
 
+    if (resolvePendingAskUser(text, ctx)) {
+      notify(ctx, "Busy run: sent your input to waiting ask_user.");
+      return { action: "handled" };
+    }
+
     state = { ...state, queue: [...state.queue, text] };
     persistState(pi, state);
-    updateStatus(ctx, state);
+    updateStatus(ctx, state, hasPendingAskUser());
     notify(ctx, `Busy run: queued follow-up (#${state.queue.length}).`);
     return { action: "handled" };
   });
@@ -71,9 +96,15 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
             notify(ctx, "Missing message. Usage: /copilot-queue add <message>");
             return Promise.resolve();
           }
+
+          if (resolvePendingAskUser(command.value, ctx)) {
+            notify(ctx, "Delivered message to waiting ask_user.");
+            return Promise.resolve();
+          }
+
           state = { ...state, queue: [...state.queue, command.value] };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, `Queued (#${state.queue.length}): ${command.value}`);
           return Promise.resolve();
         }
@@ -91,8 +122,22 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         case "clear": {
           state = { ...state, queue: [] };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, "Queue cleared.");
+          return Promise.resolve();
+        }
+
+        case "done": {
+          state = { ...state, queue: [], autopilotEnabled: false };
+          persistState(pi, state);
+          const released = resolvePendingAskUser(DONE_RESPONSE, ctx);
+          updateStatus(ctx, state, hasPendingAskUser());
+          notify(
+            ctx,
+            released
+              ? "Released waiting ask_user with 'done'. Queue cleared and autopilot disabled."
+              : "Queue cleared and autopilot disabled."
+          );
           return Promise.resolve();
         }
 
@@ -110,7 +155,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         case "autopilot-on": {
           state = { ...state, autopilotEnabled: true };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, "Autopilot enabled.");
           return Promise.resolve();
         }
@@ -118,7 +163,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         case "autopilot-off": {
           state = { ...state, autopilotEnabled: false };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, "Autopilot disabled.");
           return Promise.resolve();
         }
@@ -130,7 +175,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           }
           state = { ...state, autopilotPrompts: [...state.autopilotPrompts, command.value] };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, `Autopilot prompt added (#${state.autopilotPrompts.length}).`);
           return Promise.resolve();
         }
@@ -151,7 +196,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         case "autopilot-clear": {
           state = { ...state, autopilotPrompts: [], autopilotIndex: 0 };
           persistState(pi, state);
-          updateStatus(ctx, state);
+          updateStatus(ctx, state, hasPendingAskUser());
           notify(ctx, "Autopilot prompts cleared.");
           return Promise.resolve();
         }
@@ -168,13 +213,13 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     name: TOOL_NAME,
     label: "Ask User (Queue-Aware)",
     description:
-      "For github-copilot provider: returns the next queued response first, then autopilot prompts in cycle mode. Other providers use manual/fallback behavior.",
+      "For github-copilot provider: returns the next queued response first, then autopilot prompts in cycle mode. If queue is empty in UI mode, waits for /copilot-queue add or /copilot-queue done.",
     parameters: Type.Object({
       prompt: Type.Optional(
         Type.String({ description: "Question to display when queue and autopilot are empty" })
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (ctx.model?.provider !== ACTIVE_PROVIDER) {
         return askManuallyOrFallback(params.prompt, ctx, state.fallbackResponse);
       }
@@ -183,7 +228,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       if (queued) {
         state = { ...state, queue: state.queue.slice(1) };
         persistState(pi, state);
-        updateStatus(ctx, state);
+        updateStatus(ctx, state, hasPendingAskUser());
         notify(ctx, `Dequeued response (${state.queue.length} left).`);
         return {
           content: [{ type: "text", text: queued }],
@@ -199,14 +244,37 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           autopilotIndex: (index + 1) % state.autopilotPrompts.length,
         };
         persistState(pi, state);
-        updateStatus(ctx, state);
+        updateStatus(ctx, state, hasPendingAskUser());
         return {
           content: [{ type: "text", text }],
           details: { source: "autopilot", remaining: 0 },
         };
       }
 
-      return askManuallyOrFallback(params.prompt, ctx, state.fallbackResponse);
+      if (!ctx.hasUI) {
+        return {
+          content: [{ type: "text" as const, text: state.fallbackResponse }],
+          details: { source: "fallback", remaining: 0 },
+        };
+      }
+
+      const text = await waitForQueueInput({
+        prompt: params.prompt,
+        signal,
+        ctx,
+        fallbackResponse: state.fallbackResponse,
+        isWaiting: hasPendingAskUser,
+        markWaiting: (resolve) => {
+          pendingAskUserResolve = resolve;
+          updateStatus(ctx, state, true);
+        },
+      });
+
+      const source = text === DONE_RESPONSE ? "done" : "queue-live";
+      return {
+        content: [{ type: "text", text }],
+        details: { source, remaining: state.queue.length },
+      };
     },
   });
 }
@@ -234,6 +302,45 @@ async function askManuallyOrFallback(
   };
 }
 
+async function waitForQueueInput(options: {
+  prompt: string | undefined;
+  signal: AbortSignal | undefined;
+  ctx: { hasUI: boolean; ui: { notify: (message: string, level: "info") => void } };
+  fallbackResponse: string;
+  isWaiting: () => boolean;
+  markWaiting: (resolve: (text: string) => void) => void;
+}): Promise<string> {
+  const { prompt, signal, ctx, fallbackResponse, isWaiting, markWaiting } = options;
+
+  if (signal?.aborted) {
+    return fallbackResponse;
+  }
+
+  if (!isWaiting()) {
+    const question = prompt?.trim() ?? "Agent requested feedback.";
+    notify(
+      ctx,
+      `Queue empty. Waiting for /copilot-queue add <message> or /copilot-queue done. Prompt: ${question}`
+    );
+  }
+
+  return new Promise<string>((resolve) => {
+    let settled = false;
+
+    const settle = (text: string) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(text);
+    };
+
+    const onAbort = () => settle(fallbackResponse);
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    markWaiting((text) => settle(text));
+  });
+}
+
 function initialState(): QueueState {
   return {
     queue: [],
@@ -250,15 +357,17 @@ function persistState(pi: ExtensionAPI, state: QueueState): void {
 
 function updateStatus(
   ctx: { hasUI: boolean; ui: { setStatus: (key: string, text?: string) => void } },
-  state: QueueState
+  state: QueueState,
+  waitingForQueue: boolean
 ): void {
   if (!ctx.hasUI) return;
   const autopilot = state.autopilotEnabled
     ? `autopilot:${state.autopilotPrompts.length}`
     : "autopilot:off";
+  const waiting = waitingForQueue ? " | waiting:input" : "";
   ctx.ui.setStatus(
     EXTENSION_COMMAND,
-    `${EXTENSION_NAME}: ${state.queue.length} queued | ${autopilot}`
+    `${EXTENSION_NAME}: ${state.queue.length} queued${waiting} | ${autopilot}`
   );
 }
 

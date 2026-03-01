@@ -20,7 +20,7 @@ When `ask_user` is called:
 
 1. If queue has items → returns next queued response
 2. Else if autopilot is enabled and has prompts → returns next autopilot prompt (cycling)
-3. Else in interactive UI → asks you for manual input
+3. Else in interactive UI (Copilot provider) → waits for `/copilot-queue add <message>` or `/copilot-queue done`
 4. Else → returns fallback response (`continue` by default)
 
 When current model provider is not `github-copilot`, queue/autopilot is bypassed and `ask_user` uses manual/fallback behavior only.
@@ -63,7 +63,16 @@ Then in Pi (GitHub source):
 /copilot-queue add now add tests for edge cases
 /copilot-queue list
 /copilot-queue clear
+/copilot-queue done
 ```
+
+### Done / stop waiting
+
+```text
+/copilot-queue done
+```
+
+This clears the queue, disables autopilot, and releases a waiting `ask_user` call with `done`.
 
 ### Fallback message
 
