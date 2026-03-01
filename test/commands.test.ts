@@ -1,31 +1,29 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHelpText, parseSubcommand } from "../src/commands.js";
-import { EXTENSION_COMMAND } from "../src/constants.js";
+import test from "node:test";
+import { buildHelpText, parseCommand } from "../src/commands.js";
 
-void test("parseSubcommand splits name and rest", () => {
-  assert.deepEqual(parseSubcommand("set-label shipping-ready"), {
-    name: "set-label",
-    rest: "shipping-ready",
+void test("parseCommand parses add", () => {
+  assert.deepEqual(parseCommand("add hello world"), { name: "add", value: "hello world" });
+});
+
+void test("parseCommand parses autopilot add", () => {
+  assert.deepEqual(parseCommand("autopilot add continue with tests"), {
+    name: "autopilot-add",
+    value: "continue with tests",
   });
 });
 
-void test("parseSubcommand handles single word", () => {
-  assert.deepEqual(parseSubcommand("status"), { name: "status", rest: "" });
+void test("parseCommand parses autopilot on", () => {
+  assert.deepEqual(parseCommand("autopilot on"), { name: "autopilot-on" });
 });
 
-void test("parseSubcommand handles empty input", () => {
-  assert.deepEqual(parseSubcommand(""), { name: "", rest: "" });
-  assert.deepEqual(parseSubcommand("  "), { name: "", rest: "" });
+void test("parseCommand returns help for unknown", () => {
+  assert.deepEqual(parseCommand("wat"), { name: "help" });
 });
 
-void test("parseSubcommand lowercases name", () => {
-  assert.deepEqual(parseSubcommand("STATUS"), { name: "status", rest: "" });
-  assert.deepEqual(parseSubcommand("Set-Label Hello"), { name: "set-label", rest: "Hello" });
-});
-
-void test("buildHelpText includes command name", () => {
+void test("help includes key commands", () => {
   const help = buildHelpText();
-  assert.match(help, new RegExp(`/${EXTENSION_COMMAND} status`));
-  assert.match(help, new RegExp(`/${EXTENSION_COMMAND} set-label <text>`));
+  assert.match(help, /copilot-queue add/);
+  assert.match(help, /copilot-queue clear/);
+  assert.match(help, /copilot-queue autopilot on/);
 });
