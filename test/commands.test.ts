@@ -37,6 +37,13 @@ void test("parseCommand parses session threshold", () => {
   });
 });
 
+void test("parseCommand parses wait-timeout", () => {
+  assert.deepEqual(parseCommand("wait-timeout 45"), {
+    name: "wait-timeout",
+    seconds: "45",
+  });
+});
+
 void test("parseCommand returns help for unknown", () => {
   assert.deepEqual(parseCommand("wat"), { name: "help" });
 });
@@ -48,4 +55,5 @@ void test("help includes key commands", () => {
   assert.match(help, /copilot-queue done/);
   assert.match(help, /copilot-queue autopilot on/);
   assert.match(help, /copilot-queue session reset/);
+  assert.match(help, /copilot-queue wait-timeout/);
 });

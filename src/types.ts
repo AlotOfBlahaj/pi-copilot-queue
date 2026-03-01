@@ -8,6 +8,7 @@ export interface QueueState {
   toolCallCount: number;
   warningMinutes: number;
   warningToolCalls: number;
+  waitTimeoutSeconds: number;
   warnedTime: boolean;
   warnedToolCalls: boolean;
 }

@@ -8,6 +8,7 @@ export const ACTIVE_PROVIDER = "github-copilot";
 
 export const DEFAULT_WARNING_MINUTES = 120;
 export const DEFAULT_WARNING_TOOL_CALLS = 50;
+export const DEFAULT_WAIT_TIMEOUT_SECONDS = 0;
 
 export const COPILOT_ASK_USER_POLICY = [
   "During any process, task, or conversation—whether asking, replying, or completing phased tasks—you must call the ask_user tool to request feedback.",

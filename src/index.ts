@@ -4,6 +4,7 @@ import {
   ACTIVE_PROVIDER,
   COPILOT_ASK_USER_POLICY,
   DEFAULT_FALLBACK_RESPONSE,
+  DEFAULT_WAIT_TIMEOUT_SECONDS,
   DEFAULT_WARNING_MINUTES,
   DEFAULT_WARNING_TOOL_CALLS,
   EXTENSION_COMMAND,
@@ -266,6 +267,25 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           return Promise.resolve();
         }
 
+        case "wait-timeout": {
+          const trimmedSeconds = command.seconds.trim();
+          if (!trimmedSeconds) {
+            notify(ctx, `Wait timeout: ${state.waitTimeoutSeconds} seconds (0 = disabled).`);
+            return Promise.resolve();
+          }
+
+          const seconds = parseNonNegativeInt(trimmedSeconds);
+          if (seconds === undefined) {
+            notify(ctx, `Usage: /${EXTENSION_COMMAND} wait-timeout <seconds>`);
+            return Promise.resolve();
+          }
+
+          state = { ...state, waitTimeoutSeconds: seconds };
+          persistState(pi, state);
+          notify(ctx, `Wait timeout updated: ${state.waitTimeoutSeconds} seconds.`);
+          return Promise.resolve();
+        }
+
         case "help":
         default:
           notify(ctx, buildHelpText());
@@ -328,6 +348,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         signal,
         ctx,
         fallbackResponse: state.fallbackResponse,
+        timeoutSeconds: state.waitTimeoutSeconds,
         isWaiting: hasPendingAskUser,
         markWaiting: (resolve) => {
           pendingAskUserResolve = resolve;
@@ -335,9 +356,10 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         },
       });
 
-      const source = text === DONE_RESPONSE ? "done" : "queue-live";
+      const source =
+        text.source === "done" ? "done" : text.source === "timeout" ? "fallback" : "queue-live";
       return {
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: text.value }],
         details: { source, remaining: state.queue.length },
       };
     },
@@ -380,6 +402,14 @@ function parsePositiveInt(raw: string): number | undefined {
   return value;
 }
 
+function parseNonNegativeInt(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value < 0) return undefined;
+  return value;
+}
+
 function buildSessionStatusText(state: QueueState): string {
   const elapsed = formatElapsed(state);
   return [
@@ -387,6 +417,7 @@ function buildSessionStatusText(state: QueueState): string {
     `- Elapsed: ${elapsed}`,
     `- Tool calls: ${state.toolCallCount}`,
     `- Warning thresholds: ${state.warningMinutes} minutes, ${state.warningToolCalls} tool calls`,
+    `- Wait timeout: ${state.waitTimeoutSeconds} seconds (0 = disabled)`,
     `- Time warning emitted: ${state.warnedTime ? "yes" : "no"}`,
     `- Tool-call warning emitted: ${state.warnedToolCalls ? "yes" : "no"}`,
   ].join("\n");
@@ -420,37 +451,57 @@ async function waitForQueueInput(options: {
   signal: AbortSignal | undefined;
   ctx: { hasUI: boolean; ui: { notify: (message: string, level: "info" | "warning") => void } };
   fallbackResponse: string;
+  timeoutSeconds: number;
   isWaiting: () => boolean;
   markWaiting: (resolve: (text: string) => void) => void;
-}): Promise<string> {
-  const { prompt, signal, ctx, fallbackResponse, isWaiting, markWaiting } = options;
+}): Promise<{ value: string; source: "queue-live" | "done" | "timeout" }> {
+  const { prompt, signal, ctx, fallbackResponse, timeoutSeconds, isWaiting, markWaiting } = options;
 
   if (signal?.aborted) {
-    return fallbackResponse;
+    return { value: fallbackResponse, source: "timeout" };
   }
 
   if (!isWaiting()) {
     const question = prompt?.trim() ?? "Agent requested feedback.";
+    const timeoutText =
+      timeoutSeconds > 0
+        ? ` Waiting up to ${timeoutSeconds} seconds before fallback.`
+        : " Waiting without timeout.";
     notify(
       ctx,
-      `Queue empty. Waiting for /copilot-queue add <message> or /copilot-queue done. Prompt: ${question}`
+      `Queue empty. Waiting for /copilot-queue add <message> or /copilot-queue done.${timeoutText} Prompt: ${question}`
     );
   }
 
-  return new Promise<string>((resolve) => {
+  return new Promise<{ value: string; source: "queue-live" | "done" | "timeout" }>((resolve) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const settle = (text: string) => {
+    const settle = (result: { value: string; source: "queue-live" | "done" | "timeout" }) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      resolve(text);
+      resolve(result);
     };
 
-    const onAbort = () => settle(fallbackResponse);
+    const onAbort = () => settle({ value: fallbackResponse, source: "timeout" });
     signal?.addEventListener("abort", onAbort, { once: true });
 
-    markWaiting((text) => settle(text));
+    if (timeoutSeconds > 0) {
+      timer = setTimeout(() => {
+        notify(
+          ctx,
+          `No queued response received within ${timeoutSeconds} seconds. Returning fallback response.`,
+          "warning"
+        );
+        settle({ value: fallbackResponse, source: "timeout" });
+      }, timeoutSeconds * 1000);
+    }
+
+    markWaiting((text) =>
+      settle({ value: text, source: text === DONE_RESPONSE ? "done" : "queue-live" })
+    );
   });
 }
 
@@ -465,6 +516,7 @@ function initialState(): QueueState {
     toolCallCount: 0,
     warningMinutes: DEFAULT_WARNING_MINUTES,
     warningToolCalls: DEFAULT_WARNING_TOOL_CALLS,
+    waitTimeoutSeconds: DEFAULT_WAIT_TIMEOUT_SECONDS,
     warnedTime: false,
     warnedToolCalls: false,
   };
@@ -516,6 +568,7 @@ function parseQueueState(value: unknown): QueueState | undefined {
     toolCallCount?: unknown;
     warningMinutes?: unknown;
     warningToolCalls?: unknown;
+    waitTimeoutSeconds?: unknown;
     warnedTime?: unknown;
     warnedToolCalls?: unknown;
   };
@@ -566,6 +619,15 @@ function parseQueueState(value: unknown): QueueState | undefined {
       ? rawWarningToolCalls
       : DEFAULT_WARNING_TOOL_CALLS;
 
+  const rawWaitTimeoutSeconds =
+    typeof candidate.waitTimeoutSeconds === "number"
+      ? candidate.waitTimeoutSeconds
+      : DEFAULT_WAIT_TIMEOUT_SECONDS;
+  const waitTimeoutSeconds =
+    Number.isInteger(rawWaitTimeoutSeconds) && rawWaitTimeoutSeconds >= 0
+      ? rawWaitTimeoutSeconds
+      : DEFAULT_WAIT_TIMEOUT_SECONDS;
+
   const warnedTime = typeof candidate.warnedTime === "boolean" ? candidate.warnedTime : false;
   const warnedToolCalls =
     typeof candidate.warnedToolCalls === "boolean" ? candidate.warnedToolCalls : false;
@@ -580,6 +642,7 @@ function parseQueueState(value: unknown): QueueState | undefined {
     toolCallCount,
     warningMinutes,
     warningToolCalls,
+    waitTimeoutSeconds,
     warnedTime,
     warnedToolCalls,
   };

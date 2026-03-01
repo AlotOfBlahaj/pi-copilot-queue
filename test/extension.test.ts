@@ -135,6 +135,27 @@ void test("done command releases waiting ask_user", async () => {
   assert.equal(waitingResult.details.source, "done");
 });
 
+void test("wait timeout returns fallback when no queued input arrives", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  assert.ok(captured.commandHandler);
+  assert.ok(captured.toolExecute);
+
+  await captured.commandHandler?.("wait-timeout 1", createCommandCtx());
+  const waitingResultPromise = captured.toolExecute?.(
+    "call-1",
+    { prompt: "Need your next instruction" },
+    undefined,
+    undefined,
+    createToolCtx({ hasUI: true })
+  ) as Promise<{ content: { type: string; text: string }[]; details: { source: string } }>;
+
+  const waitingResult = await waitingResultPromise;
+  assert.equal(waitingResult.content[0]?.text, "continue");
+  assert.equal(waitingResult.details.source, "fallback");
+});
+
 void test("session status and reset commands work", async () => {
   const captured = createCaptured();
   extension(createPi(captured));

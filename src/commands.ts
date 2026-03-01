@@ -14,6 +14,7 @@ export type QueueCommand =
   | { name: "session-reset" }
   | { name: "session-status" }
   | { name: "session-threshold"; minutes: string; toolCalls: string }
+  | { name: "wait-timeout"; seconds: string }
   | { name: "help" };
 
 export function buildHelpText(): string {
@@ -31,6 +32,7 @@ export function buildHelpText(): string {
     `/${EXTENSION_COMMAND} session status`,
     `/${EXTENSION_COMMAND} session reset`,
     `/${EXTENSION_COMMAND} session threshold <minutes> <tool-calls>`,
+    `/${EXTENSION_COMMAND} wait-timeout <seconds>`,
     `/${EXTENSION_COMMAND} help`,
   ].join("\n");
 }
@@ -58,6 +60,8 @@ export function parseCommand(raw: string): QueueCommand {
       return parseAutopilot(rest);
     case "session":
       return parseSession(rest);
+    case "wait-timeout":
+      return { name: "wait-timeout", seconds: rest };
     default:
       return { name: "help" };
   }
