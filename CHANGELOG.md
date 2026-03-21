@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/ayagmar/pi-copilot-queue/compare/v0.3.0...v0.6.0) (2026-03-21)
+
+### Features
+
+* add terminal notification utilities for user input prompts ([d3fdaf6](https://github.com/ayagmar/pi-copilot-queue/commit/d3fdaf632e52140affacd7c0c710a8b0f9afd802))
+* enhance notifyTerminal to degrade gracefully in non-TTY environments ([c8ad61a](https://github.com/ayagmar/pi-copilot-queue/commit/c8ad61ad96957abbe4622cda313affa3ab2d8e61))
+* **queue:** add global provider settings ([e2eee19](https://github.com/ayagmar/pi-copilot-queue/commit/e2eee19d5639996b806b21f8f5d0024a71f968ac))
+* **queue:** add provider settings and stop-aware tool forcing ([356448d](https://github.com/ayagmar/pi-copilot-queue/commit/356448d22c7e76fa61fc1ab496867bbff322092f))
+* **queue:** add provider settings command ([c9e8ee1](https://github.com/ayagmar/pi-copilot-queue/commit/c9e8ee16555b21b3c023ae824ff6123e4143e73e))
+* **queue:** add provider subcommand autocomplete ([61ad978](https://github.com/ayagmar/pi-copilot-queue/commit/61ad9780ef6627bfab46798125e62b8a477c5d9c))
+
 ## [0.3.0](https://github.com/ayagmar/pi-copilot-queue/compare/v0.2.1...v0.3.0) (2026-03-13)
 
 ### Features
