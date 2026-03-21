@@ -66,8 +66,16 @@ function readProviderOverride(settings: PiSettingsFile | undefined): string[] | 
   return undefined;
 }
 
-export function writeProjectConfiguredProviders(cwd: string, providers: string[]): string {
-  const path = join(cwd, ".pi", "settings.json");
+export function writeConfiguredProviders(
+  cwd: string,
+  providers: string[],
+  scope: "project" | "global" = "project",
+  homeDir: string = homedir()
+): string {
+  const path =
+    scope === "global"
+      ? join(homeDir, ".pi", "agent", "settings.json")
+      : join(cwd, ".pi", "settings.json");
   const existing = readSettingsFile(path);
   const nextProviders = normalizeProviders(providers) ?? [];
   const nextQueue: CopilotQueueSettings =
@@ -84,6 +92,18 @@ export function writeProjectConfiguredProviders(cwd: string, providers: string[]
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
   return path;
+}
+
+export function writeProjectConfiguredProviders(cwd: string, providers: string[]): string {
+  return writeConfiguredProviders(cwd, providers, "project");
+}
+
+export function writeGlobalConfiguredProviders(
+  cwd: string,
+  providers: string[],
+  homeDir: string = homedir()
+): string {
+  return writeConfiguredProviders(cwd, providers, "global", homeDir);
 }
 
 function normalizeProviders(value: unknown): string[] | undefined {

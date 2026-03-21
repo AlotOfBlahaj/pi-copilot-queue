@@ -137,17 +137,20 @@ Use an empty array to disable provider interception entirely:
 }
 ```
 
-You can also manage the project override from inside Pi:
+You can also manage the project or global override from inside Pi:
 
 ```text
 /copilot-queue providers
 /copilot-queue providers github-copilot openai
+/copilot-queue providers global openai anthropic
 /copilot-queue providers off
+/copilot-queue providers global off
 ```
 
 - `providers` with no arguments shows the current active list.
 - Passing one or more provider names writes `.pi/settings.json` for the current project.
-- `off` writes an empty provider list for this project.
+- Prefixing with `global` writes `~/.pi/agent/settings.json` instead.
+- `off` writes an empty provider list for the selected scope.
 
 ## Usage
 

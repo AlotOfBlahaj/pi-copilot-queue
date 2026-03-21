@@ -661,6 +661,55 @@ void test("providers command updates project settings and managed provider scope
   }
 });
 
+void test("providers command updates global settings when scoped globally", async () => {
+  const previousCwd = process.cwd();
+  const previousHome = process.env.HOME;
+  const cwd = createTempDir();
+  const homeDir = createTempDir();
+
+  try {
+    process.chdir(cwd);
+    process.env.HOME = homeDir;
+
+    const captured = createCaptured();
+    extension(createPi(captured));
+
+    const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
+    assert.ok(captured.commandHandler);
+    assert.ok(beforeAgentStartHook);
+
+    const beforeUpdate = beforeAgentStartHook?.(
+      { systemPrompt: "base prompt" },
+      createToolCtx({ provider: "openai" })
+    );
+    assert.equal(beforeUpdate, undefined);
+
+    await captured.commandHandler?.("providers global openai anthropic", createCommandCtx());
+
+    const settingsPath = join(homeDir, ".pi", "agent", "settings.json");
+    const written = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+      copilotQueue?: { providers?: string[] };
+    };
+    assert.deepEqual(written.copilotQueue?.providers, ["openai", "anthropic"]);
+
+    const afterUpdate = beforeAgentStartHook?.(
+      { systemPrompt: "base prompt" },
+      createToolCtx({ provider: "openai" })
+    ) as { systemPrompt: string } | undefined;
+    assert.ok(afterUpdate);
+    assert.match(afterUpdate.systemPrompt, /call the ask_user tool/i);
+  } finally {
+    process.chdir(previousCwd);
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 function createCommandCtx(
   notifications?: string[],
   hasUI = false,

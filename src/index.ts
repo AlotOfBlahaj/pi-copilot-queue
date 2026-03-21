@@ -2,7 +2,11 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { buildHelpText, parseCommand } from "./commands.js";
-import { resolveConfiguredProviders, writeProjectConfiguredProviders } from "./config.js";
+import {
+  resolveConfiguredProviders,
+  writeGlobalConfiguredProviders,
+  writeProjectConfiguredProviders,
+} from "./config.js";
 import {
   COPILOT_ASK_USER_POLICY,
   COPILOT_ASK_USER_REMINDER_MESSAGE,
@@ -291,36 +295,48 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         case "providers": {
           refreshConfiguredProviders();
           const raw = command.value.trim();
-          if (!raw || raw === "show" || raw === "list" || raw === "status") {
+          const { scope, value } = parseProviderScope(raw);
+          const mode = value.toLowerCase();
+          if (!raw || mode === "show" || mode === "list" || mode === "status") {
             notify(ctx, buildConfiguredProvidersText());
             return Promise.resolve();
           }
 
-          if (raw === "off" || raw === "clear") {
-            const path = writeProjectConfiguredProviders(process.cwd(), []);
+          if (mode === "off" || mode === "clear") {
+            const scopeLabel = scope === "global" ? "Global" : "Project";
+            const path =
+              scope === "global"
+                ? writeGlobalConfiguredProviders(process.cwd(), [])
+                : writeProjectConfiguredProviders(process.cwd(), []);
             refreshConfiguredProviders();
             updateStatus(ctx, state, hasPendingAskUser());
-            notify(ctx, `Copilot Queue providers disabled for this project. Saved to ${path}.`);
+            notify(ctx, `${scopeLabel} providers disabled. Saved to ${path}.`);
             return Promise.resolve();
           }
 
-          const values = /^set(?:\s+|$)/i.test(raw) ? raw.replace(/^set\s*/i, "").trim() : raw;
+          const values = /^set(?:\s+|$)/i.test(value)
+            ? value.replace(/^set\s*/i, "").trim()
+            : value;
           const providers = values
             .split(/[\s,]+/)
             .map((item) => item.trim())
             .filter(Boolean);
 
           if (providers.length === 0) {
-            notify(ctx, `Usage: /${EXTENSION_COMMAND} providers <name... | off>`);
+            notify(ctx, `Usage: /${EXTENSION_COMMAND} providers [global|project] <name... | off>`);
             return Promise.resolve();
           }
 
-          const path = writeProjectConfiguredProviders(process.cwd(), providers);
+          const scopeLabel = scope === "global" ? "Global" : "Project";
+          const path =
+            scope === "global"
+              ? writeGlobalConfiguredProviders(process.cwd(), providers)
+              : writeProjectConfiguredProviders(process.cwd(), providers);
           refreshConfiguredProviders();
           updateStatus(ctx, state, hasPendingAskUser());
           notify(
             ctx,
-            `Copilot Queue providers updated: ${providers.join(", ")}. Saved to ${path}.`
+            `${scopeLabel} providers updated: ${providers.join(", ")}. Saved to ${path}.`
           );
           return Promise.resolve();
         }
@@ -633,10 +649,24 @@ function buildConfiguredProvidersText(): string {
     `Copilot Queue provider settings:`,
     `- Active providers: ${getConfiguredProviderLabel()}`,
     `- Set this project: /${EXTENSION_COMMAND} providers <name...>`,
+    `- Set global default: /${EXTENSION_COMMAND} providers global <name...>`,
     `- Disable this project: /${EXTENSION_COMMAND} providers off`,
+    `- Disable global default: /${EXTENSION_COMMAND} providers global off`,
     `- Project file: .pi/settings.json`,
-    `- Global fallback: ~/.pi/agent/settings.json`,
+    `- Global file: ~/.pi/agent/settings.json`,
   ].join("\n");
+}
+
+function parseProviderScope(raw: string): { scope: "project" | "global"; value: string } {
+  if (/^global(?:\s+|$)/i.test(raw)) {
+    return { scope: "global", value: raw.replace(/^global\s*/i, "").trim() };
+  }
+
+  if (/^project(?:\s+|$)/i.test(raw)) {
+    return { scope: "project", value: raw.replace(/^project\s*/i, "").trim() };
+  }
+
+  return { scope: "project", value: raw };
 }
 
 function refreshConfiguredProviders(cwd: string = process.cwd()): void {

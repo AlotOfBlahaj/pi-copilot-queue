@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { resolveConfiguredProviders, writeProjectConfiguredProviders } from "../src/config.js";
+import {
+  resolveConfiguredProviders,
+  writeGlobalConfiguredProviders,
+  writeProjectConfiguredProviders,
+} from "../src/config.js";
 
 function createTempDir(): string {
   return mkdtempSync(join(tmpdir(), "pi-copilot-queue-"));
@@ -116,5 +120,23 @@ void test("writeProjectConfiguredProviders writes project settings", () => {
     assert.match(raw, /"providers": \[\s+"github-copilot",\s+"openai"\s+\]/s);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+void test("writeGlobalConfiguredProviders writes global settings", () => {
+  const cwd = createTempDir();
+  const homeDir = createTempDir();
+
+  try {
+    const path = writeGlobalConfiguredProviders(cwd, ["openai", "anthropic"], homeDir);
+
+    assert.equal(path, join(homeDir, ".pi", "agent", "settings.json"));
+    assert.deepEqual(resolveConfiguredProviders(cwd, homeDir), ["openai", "anthropic"]);
+
+    const raw = readFileSync(path, "utf8");
+    assert.match(raw, /"providers": \[\s+"openai",\s+"anthropic"\s+\]/s);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
   }
 });

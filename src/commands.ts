@@ -29,7 +29,7 @@ export function buildHelpText(): string {
     `/${EXTENSION_COMMAND} done`,
     `/${EXTENSION_COMMAND} stop`,
     `/${EXTENSION_COMMAND} capture <on|off>`,
-    `/${EXTENSION_COMMAND} providers <name... | off>`,
+    `/${EXTENSION_COMMAND} providers [global|project] <name... | off>`,
     `/${EXTENSION_COMMAND} autopilot on`,
     `/${EXTENSION_COMMAND} autopilot off`,
     `/${EXTENSION_COMMAND} autopilot add <message>`,
