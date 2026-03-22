@@ -3,7 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { buildHelpText, parseCommand } from "./commands.js";
 import {
-  resolveConfiguredProviders,
+  resolveCopilotQueueSettings,
   writeGlobalConfiguredProviders,
   writeProjectConfiguredProviders,
 } from "./config.js";
@@ -23,10 +23,11 @@ import { notifyTerminal } from "./notify.js";
 import type { QueueState } from "./types.js";
 
 const STOP_RESPONSE = "stop";
-let configuredProviders = resolveConfiguredProviders(process.cwd());
+let configuredProviders: string[] = [];
+let showStatusLine = true;
 
 export default function copilotQueueExtension(pi: ExtensionAPI) {
-  refreshConfiguredProviders();
+  refreshConfiguration();
 
   let state: QueueState = initialState();
   let pendingAskUserResolve: ((text: string) => void) | undefined;
@@ -51,7 +52,10 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     ctx: {
       hasUI: boolean;
       model: ExtensionContext["model"];
-      ui: { setStatus: (key: string, text?: string) => void };
+      ui: {
+        setStatus: (key: string, text?: string) => void;
+        theme?: StatusTheme;
+      };
     }
   ): boolean {
     if (!pendingAskUserResolve) return false;
@@ -66,7 +70,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   function syncState(
     ctx: Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui" | "model">
   ): void {
-    refreshConfiguredProviders();
+    refreshConfiguration();
     state = restoreFromContext(ctx);
     currentRunStarted = false;
     currentRunAskUserCallCount = 0;
@@ -115,11 +119,10 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     if (!isManagedProvider(ctx)) {
       return;
     }
-    if (event.toolName !== TOOL_NAME) {
-      return;
-    }
 
-    currentRunAskUserCallCount += 1;
+    if (event.toolName === TOOL_NAME) {
+      currentRunAskUserCallCount += 1;
+    }
 
     let nextState: QueueState = {
       ...state,
@@ -294,7 +297,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         }
 
         case "providers": {
-          refreshConfiguredProviders();
+          refreshConfiguration();
           const raw = command.value.trim();
           const { scope, value } = parseProviderScope(raw);
           const mode = value.toLowerCase();
@@ -309,7 +312,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
               scope === "global"
                 ? writeGlobalConfiguredProviders(process.cwd(), [])
                 : writeProjectConfiguredProviders(process.cwd(), []);
-            refreshConfiguredProviders();
+            refreshConfiguration();
             updateStatus(ctx, state, hasPendingAskUser());
             notify(ctx, `${scopeLabel} providers disabled. Saved to ${path}.`);
             return Promise.resolve();
@@ -333,7 +336,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
             scope === "global"
               ? writeGlobalConfiguredProviders(process.cwd(), providers)
               : writeProjectConfiguredProviders(process.cwd(), providers);
-          refreshConfiguredProviders();
+          refreshConfiguration();
           updateStatus(ctx, state, hasPendingAskUser());
           notify(
             ctx,
@@ -482,7 +485,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Ask User (Queue-Aware)",
-    description: `For configured providers: call this instead of ending with a direct assistant reply. Returns the next queued response first, then autopilot prompts in cycle mode. If queue is empty in UI mode, waits for /copilot-queue add or /copilot-queue done.`,
+    description: `For configured providers: call this instead of ending with a direct assistant reply. Returns the next queued response first, then autopilot prompts in cycle mode. If queue is empty in UI mode, waits for /copilot-queue add, /copilot-queue done, or /copilot-queue stop.`,
     parameters: Type.Object({
       prompt: Type.Optional(
         Type.String({ description: "Question to display when queue and autopilot are empty" })
@@ -558,6 +561,9 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           updateStatus(ctx, state, true);
         },
       });
+
+      pendingAskUserResolve = undefined;
+      updateStatus(ctx, state, false);
 
       const source =
         text.source === "stop" ? "stop" : text.source === "timeout" ? "fallback" : "queue-live";
@@ -704,8 +710,10 @@ function getProviderSuggestions(prefix: string): string[] {
   return items.filter((item) => item.startsWith(tokens[tokens.length - 1] ?? ""));
 }
 
-function refreshConfiguredProviders(cwd: string = process.cwd()): void {
-  configuredProviders = resolveConfiguredProviders(cwd);
+function refreshConfiguration(cwd: string = process.cwd()): void {
+  const settings = resolveCopilotQueueSettings(cwd);
+  configuredProviders = settings.providers;
+  showStatusLine = settings.showStatusLine;
 }
 
 function formatComplianceRate(state: QueueState): string {
@@ -974,32 +982,72 @@ function persistState(pi: ExtensionAPI, state: QueueState): void {
   pi.appendEntry(STATE_ENTRY_TYPE, state);
 }
 
+interface StatusTheme {
+  fg: (color: "accent" | "text" | "dim" | "warning", text: string) => string;
+  bold: (text: string) => string;
+}
+
 function updateStatus(
   ctx: {
     hasUI: boolean;
     model: ExtensionContext["model"];
-    ui: { setStatus: (key: string, text?: string) => void };
+    ui: {
+      setStatus: (key: string, text?: string) => void;
+      theme?: StatusTheme;
+    };
   },
   state: QueueState,
   waitingForQueue: boolean
 ): void {
   if (!ctx.hasUI) return;
-  if (!ctx.model?.provider || !configuredProviders.includes(ctx.model.provider)) {
+  if (
+    !showStatusLine ||
+    !ctx.model?.provider ||
+    !configuredProviders.includes(ctx.model.provider)
+  ) {
     ctx.ui.setStatus(EXTENSION_COMMAND);
     return;
   }
 
-  const autopilot = state.autopilotEnabled
-    ? `autopilot:${state.autopilotPrompts.length}`
-    : "autopilot:off";
-  const capture = state.captureInteractiveInput ? "capture:on" : "capture:off";
-  const waiting = waitingForQueue ? " | waiting:input" : "";
-  const misses = state.missedAskUserRunCount > 0 ? ` · miss:${state.missedAskUserRunCount}` : "";
-  const session = `${formatElapsed(state)} · ${state.toolCallCount} tools${misses}`;
-  ctx.ui.setStatus(
-    EXTENSION_COMMAND,
-    `${EXTENSION_NAME}: ${state.queue.length} queued${waiting} | ${autopilot} | ${capture} | ${session}`
-  );
+  ctx.ui.setStatus(EXTENSION_COMMAND, formatStatusText(state, waitingForQueue, ctx.ui.theme));
+}
+
+function formatStatusText(
+  state: QueueState,
+  waitingForQueue: boolean,
+  theme?: StatusTheme
+): string {
+  if (!theme) {
+    const autopilot = state.autopilotEnabled
+      ? `autopilot:${state.autopilotPrompts.length}`
+      : "autopilot:off";
+    const capture = state.captureInteractiveInput ? "capture:on" : "capture:off";
+    const waiting = waitingForQueue ? " | waiting:input" : "";
+    const misses = state.missedAskUserRunCount > 0 ? ` · miss:${state.missedAskUserRunCount}` : "";
+    const session = `${formatElapsed(state)} · ${state.toolCallCount} tools${misses}`;
+    return `${EXTENSION_NAME}: ${state.queue.length} queued${waiting} | ${autopilot} | ${capture} | ${session}`;
+  }
+
+  const separator = theme.fg("dim", " • ");
+  const parts = [
+    theme.fg("accent", theme.bold(EXTENSION_NAME)),
+    `${theme.fg(state.queue.length > 0 ? "accent" : "text", String(state.queue.length))}${theme.fg("dim", " queued")}`,
+    state.autopilotEnabled
+      ? `${theme.fg("accent", String(state.autopilotPrompts.length))}${theme.fg("dim", " autopilot")}`
+      : theme.fg("dim", "autopilot off"),
+    theme.fg("dim", `capture ${state.captureInteractiveInput ? "on" : "off"}`),
+    theme.fg("dim", `${formatElapsed(state)} • ${state.toolCallCount} tools`),
+  ];
+
+  if (waitingForQueue) {
+    parts.splice(2, 0, theme.fg("warning", "waiting for input"));
+  }
+
+  if (state.missedAskUserRunCount > 0) {
+    parts.push(theme.fg("warning", `miss ${state.missedAskUserRunCount}`));
+  }
+
+  return parts.join(separator);
 }
 
 function restoreFromContext(ctx: Pick<ExtensionContext, "sessionManager">): QueueState {

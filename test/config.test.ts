@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   resolveConfiguredProviders,
+  resolveShowStatusLine,
   writeGlobalConfiguredProviders,
   writeProjectConfiguredProviders,
 } from "../src/config.js";
@@ -24,6 +25,18 @@ void test("resolveConfiguredProviders defaults to github-copilot", () => {
 
   try {
     assert.deepEqual(resolveConfiguredProviders(cwd, homeDir), ["github-copilot"]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+void test("resolveShowStatusLine defaults to true", () => {
+  const cwd = createTempDir();
+  const homeDir = createTempDir();
+
+  try {
+    assert.equal(resolveShowStatusLine(cwd, homeDir), true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
@@ -83,6 +96,29 @@ void test("resolveConfiguredProviders supports single-provider shorthand", () =>
     });
 
     assert.deepEqual(resolveConfiguredProviders(cwd, homeDir), ["openai"]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+void test("resolveShowStatusLine lets project settings override global settings", () => {
+  const cwd = createTempDir();
+  const homeDir = createTempDir();
+
+  try {
+    writeJson(join(homeDir, ".pi", "agent", "settings.json"), {
+      copilotQueue: {
+        showStatusLine: true,
+      },
+    });
+    writeJson(join(cwd, ".pi", "settings.json"), {
+      copilotQueue: {
+        showStatusLine: false,
+      },
+    });
+
+    assert.equal(resolveShowStatusLine(cwd, homeDir), false);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
