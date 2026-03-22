@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/ayagmar/pi-copilot-queue/compare/v0.6.0...v0.7.0) (2026-03-22)
+
+### Features
+
+* **queue:** add settings UI and command completions ([74732bd](https://github.com/ayagmar/pi-copilot-queue/commit/74732bd55c956cc46df6d452416c2d91271ab2ed))
+* **queue:** overhaul settings and completions ([6c36e42](https://github.com/ayagmar/pi-copilot-queue/commit/6c36e427c2f4f35310d416882388fc201e15ddf3))
+
+### Bug Fixes
+
+* **queue:** improve status line UX ([517ae8c](https://github.com/ayagmar/pi-copilot-queue/commit/517ae8c95c54b03c0b54c1f7a786f7f5b794f78f))
+
 ## [0.6.0](https://github.com/ayagmar/pi-copilot-queue/compare/v0.3.0...v0.6.0) (2026-03-21)
 
 ### Features
