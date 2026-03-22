@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/ayagmar/pi-copilot-queue/compare/v0.7.0...v0.7.1) (2026-03-22)
+
+### Bug Fixes
+
+* **queue:** remove payload patching and project overrides ([65f120a](https://github.com/ayagmar/pi-copilot-queue/commit/65f120ab56fc2b76f1e5593acffd430ac2af9a60))
+* **release:** respect selected version bump ([34a52a8](https://github.com/ayagmar/pi-copilot-queue/commit/34a52a8aad34662a6efb44e5b0f0500383a02221))
+
 ## [0.7.0](https://github.com/ayagmar/pi-copilot-queue/compare/v0.6.0...v0.7.0) (2026-03-22)
 
 ### Features
