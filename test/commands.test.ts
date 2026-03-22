@@ -36,6 +36,10 @@ void test("parseCommand parses providers", () => {
   });
 });
 
+void test("parseCommand parses settings", () => {
+  assert.deepEqual(parseCommand("settings"), { name: "settings" });
+});
+
 void test("parseCommand parses session status", () => {
   assert.deepEqual(parseCommand("session status"), { name: "session-status" });
 });
@@ -71,6 +75,7 @@ void test("help includes key commands", () => {
   assert.match(help, /copilot-queue stop/);
   assert.match(help, /copilot-queue capture/);
   assert.match(help, /copilot-queue providers/);
+  assert.match(help, /copilot-queue settings/);
   assert.match(help, /copilot-queue autopilot on/);
   assert.match(help, /copilot-queue session reset/);
   assert.match(help, /copilot-queue wait-timeout/);

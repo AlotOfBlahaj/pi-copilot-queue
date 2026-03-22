@@ -134,6 +134,32 @@ export function writeGlobalConfiguredProviders(
   return writeConfiguredProviders(cwd, providers, "global", homeDir);
 }
 
+export function writeShowStatusLine(
+  cwd: string,
+  nextShowStatusLine: boolean,
+  scope: "project" | "global" = "project",
+  homeDir: string = homedir()
+): string {
+  const path =
+    scope === "global"
+      ? join(homeDir, ".pi", "agent", "settings.json")
+      : join(cwd, ".pi", "settings.json");
+  const existing = readSettingsFile(path);
+  const nextQueue: CopilotQueueSettings =
+    existing?.copilotQueue && typeof existing.copilotQueue === "object"
+      ? { ...existing.copilotQueue }
+      : {};
+
+  nextQueue.showStatusLine = nextShowStatusLine;
+
+  const nextSettings: PiSettingsFile = existing ? { ...existing } : {};
+  nextSettings.copilotQueue = nextQueue;
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  return path;
+}
+
 function normalizeProviders(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

@@ -157,6 +157,7 @@ You can also manage the project or global override from inside Pi:
 /copilot-queue providers global openai anthropic
 /copilot-queue providers off
 /copilot-queue providers global off
+/copilot-queue settings
 ```
 
 - `providers` with no arguments shows the current active list.
@@ -186,6 +187,21 @@ You can also manage the project or global override from inside Pi:
 ```
 
 Both commands request an explicit stop. If `ask_user` is currently waiting, it is released with `stop`. Otherwise the next `ask_user` call will immediately receive `stop`.
+
+### Quick settings UI
+
+```text
+/copilot-queue settings
+```
+
+The settings UI lets you quickly adjust:
+
+- busy input capture
+- status line visibility
+- empty-queue wait timeout
+- autopilot on/off
+
+Use the dedicated commands for provider routing, fallback text, and autopilot prompt editing.
 
 ### Interactive capture while busy (configured providers only)
 

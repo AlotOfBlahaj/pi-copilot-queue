@@ -8,6 +8,7 @@ import {
   resolveShowStatusLine,
   writeGlobalConfiguredProviders,
   writeProjectConfiguredProviders,
+  writeShowStatusLine,
 } from "../src/config.js";
 
 function createTempDir(): string {
@@ -174,5 +175,25 @@ void test("writeGlobalConfiguredProviders writes global settings", () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+void test("writeShowStatusLine preserves configured providers", () => {
+  const cwd = createTempDir();
+
+  try {
+    writeJson(join(cwd, ".pi", "settings.json"), {
+      copilotQueue: {
+        providers: ["github-copilot", "openai"],
+      },
+    });
+
+    const path = writeShowStatusLine(cwd, false);
+
+    assert.equal(path, join(cwd, ".pi", "settings.json"));
+    assert.deepEqual(resolveConfiguredProviders(cwd, cwd), ["github-copilot", "openai"]);
+    assert.equal(resolveShowStatusLine(cwd, cwd), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

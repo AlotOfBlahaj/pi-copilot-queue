@@ -9,6 +9,7 @@ export type QueueCommand =
   | { name: "stop" }
   | { name: "capture"; mode: string }
   | { name: "providers"; value: string }
+  | { name: "settings" }
   | { name: "autopilot-on" }
   | { name: "autopilot-off" }
   | { name: "autopilot-add"; value: string }
@@ -30,6 +31,7 @@ export function buildHelpText(): string {
     `/${EXTENSION_COMMAND} stop`,
     `/${EXTENSION_COMMAND} capture <on|off>`,
     `/${EXTENSION_COMMAND} providers [global|project] <name... | off>`,
+    `/${EXTENSION_COMMAND} settings`,
     `/${EXTENSION_COMMAND} autopilot on`,
     `/${EXTENSION_COMMAND} autopilot off`,
     `/${EXTENSION_COMMAND} autopilot add <message>`,
@@ -41,6 +43,17 @@ export function buildHelpText(): string {
     `/${EXTENSION_COMMAND} wait-timeout <seconds>`,
     `/${EXTENSION_COMMAND} help`,
   ].join("\n");
+}
+
+export function buildCommandArgumentCompletions(
+  prefix: string
+): { value: string; label: string }[] | null {
+  const suggestions = getCommandSuggestions(prefix);
+  if (suggestions.length === 0) {
+    return null;
+  }
+
+  return suggestions.map((value) => ({ value, label: value }));
 }
 
 export function parseCommand(raw: string): QueueCommand {
@@ -68,6 +81,8 @@ export function parseCommand(raw: string): QueueCommand {
       return { name: "capture", mode: rest };
     case "providers":
       return { name: "providers", value: rest };
+    case "settings":
+      return { name: "settings" };
     case "autopilot":
       return parseAutopilot(rest);
     case "session":
@@ -77,6 +92,99 @@ export function parseCommand(raw: string): QueueCommand {
     default:
       return { name: "help" };
   }
+}
+
+function getCommandSuggestions(prefix: string): string[] {
+  const trimmed = prefix.trimStart();
+  if (!trimmed) {
+    return [
+      "add ",
+      "list",
+      "clear",
+      "fallback ",
+      "done",
+      "stop",
+      "capture ",
+      "providers ",
+      "settings",
+      "autopilot ",
+      "session ",
+      "wait-timeout ",
+      "help",
+    ];
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const command = parts[0]?.toLowerCase() ?? "";
+
+  if (parts.length === 1 && !prefix.endsWith(" ")) {
+    return [
+      "add ",
+      "list",
+      "clear",
+      "fallback ",
+      "done",
+      "stop",
+      "capture ",
+      "providers ",
+      "settings",
+      "autopilot ",
+      "session ",
+      "wait-timeout ",
+      "help",
+    ].filter((item) => item.startsWith(trimmed));
+  }
+
+  switch (command) {
+    case "capture":
+      return matchNestedSuggestions(prefix, ["capture on", "capture off"]);
+    case "providers":
+      return getProviderSuggestions(prefix);
+    case "autopilot":
+      return matchNestedSuggestions(prefix, [
+        "autopilot on",
+        "autopilot off",
+        "autopilot add ",
+        "autopilot list",
+        "autopilot clear",
+      ]);
+    case "session":
+      return matchNestedSuggestions(prefix, [
+        "session status",
+        "session reset",
+        "session threshold ",
+      ]);
+    case "wait-timeout":
+      return matchNestedSuggestions(prefix, [
+        "wait-timeout 0",
+        "wait-timeout 30",
+        "wait-timeout 60",
+      ]);
+    default:
+      return [];
+  }
+}
+
+function matchNestedSuggestions(prefix: string, suggestions: string[]): string[] {
+  const trimmed = prefix.trimStart();
+  return suggestions.filter((item) => item.startsWith(trimmed));
+}
+
+function getProviderSuggestions(prefix: string): string[] {
+  return matchNestedSuggestions(prefix, [
+    "providers global ",
+    "providers project ",
+    "providers show",
+    "providers list",
+    "providers status",
+    "providers set ",
+    "providers off",
+    "providers clear",
+    "providers global set ",
+    "providers global off",
+    "providers project set ",
+    "providers project off",
+  ]);
 }
 
 function parseAutopilot(raw: string): QueueCommand {

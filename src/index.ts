@@ -1,11 +1,16 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import {
+  getSettingsListTheme,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
+import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { buildHelpText, parseCommand } from "./commands.js";
+import { buildCommandArgumentCompletions, buildHelpText, parseCommand } from "./commands.js";
 import {
   resolveCopilotQueueSettings,
   writeGlobalConfiguredProviders,
   writeProjectConfiguredProviders,
+  writeShowStatusLine,
 } from "./config.js";
 import {
   COPILOT_ASK_USER_POLICY,
@@ -204,7 +209,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
 
   pi.registerCommand(EXTENSION_COMMAND, {
     description: "Queue responses for ask_user tool calls",
-    getArgumentCompletions: (prefix: string) => buildProviderArgumentCompletions(prefix),
+    getArgumentCompletions: (prefix: string) => buildCommandArgumentCompletions(prefix),
     handler: (args, ctx) => {
       const command = parseCommand(args);
 
@@ -354,6 +359,40 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           persistState(pi, state);
           notify(ctx, `Fallback response updated: ${state.fallbackResponse}`);
           return Promise.resolve();
+        }
+
+        case "settings": {
+          refreshConfiguration();
+
+          if (!ctx.hasUI) {
+            notify(ctx, buildSettingsSummaryText(state));
+            return Promise.resolve();
+          }
+
+          return openSettingsUi(ctx, {
+            getState: () => state,
+            getShowStatusLine: () => showStatusLine,
+            getConfiguredProviders: () => configuredProviders,
+            onCaptureChange: (enabled) => {
+              state = { ...state, captureInteractiveInput: enabled };
+              persistState(pi, state);
+              updateStatus(ctx, state, hasPendingAskUser());
+            },
+            onShowStatusLineChange: (enabled) => {
+              writeShowStatusLine(process.cwd(), enabled);
+              refreshConfiguration();
+              updateStatus(ctx, state, hasPendingAskUser());
+            },
+            onWaitTimeoutChange: (seconds) => {
+              state = { ...state, waitTimeoutSeconds: seconds };
+              persistState(pi, state);
+            },
+            onAutopilotEnabledChange: (enabled) => {
+              state = { ...state, autopilotEnabled: enabled };
+              persistState(pi, state);
+              updateStatus(ctx, state, hasPendingAskUser());
+            },
+          });
         }
 
         case "autopilot-on": {
@@ -676,38 +715,138 @@ function parseProviderScope(raw: string): { scope: "project" | "global"; value: 
   return { scope: "project", value: raw };
 }
 
-function buildProviderArgumentCompletions(
-  prefix: string
-): { value: string; label: string }[] | null {
-  const trimmed = prefix.trim();
-  const suggestions = getProviderSuggestions(trimmed);
+function buildSettingsSummaryText(state: QueueState): string {
+  const timeout =
+    state.waitTimeoutSeconds === 0 ? "off" : `${state.waitTimeoutSeconds} seconds before fallback`;
 
-  if (suggestions.length === 0) {
-    return null;
-  }
-
-  return suggestions.map((value) => ({ value, label: value }));
+  return [
+    `Copilot Queue settings:`,
+    `- Managed providers: ${getConfiguredProviderLabel()}`,
+    `- Busy input capture: ${state.captureInteractiveInput ? "on" : "off"}`,
+    `- Status line: ${showStatusLine ? "on" : "off"}`,
+    `- Empty-queue wait timeout: ${timeout}`,
+    `- Fallback response: ${state.fallbackResponse}`,
+    `- Autopilot: ${state.autopilotEnabled ? "on" : "off"} (${state.autopilotPrompts.length} prompts)`,
+    `- Use /${EXTENSION_COMMAND} providers ... to edit provider routing.`,
+    `- Use /${EXTENSION_COMMAND} autopilot add <message> to manage autopilot prompts.`,
+  ].join("\n");
 }
 
-function getProviderSuggestions(prefix: string): string[] {
-  const items = ["global", "project", "show", "list", "status", "set", "off", "clear"];
-  if (!prefix) {
-    return items;
+async function openSettingsUi(
+  ctx: ExtensionContext,
+  options: {
+    getState: () => QueueState;
+    getShowStatusLine: () => boolean;
+    getConfiguredProviders: () => string[];
+    onCaptureChange: (enabled: boolean) => void;
+    onShowStatusLineChange: (enabled: boolean) => void;
+    onWaitTimeoutChange: (seconds: number) => void;
+    onAutopilotEnabledChange: (enabled: boolean) => void;
   }
+): Promise<void> {
+  await ctx.ui.custom((tui, theme, _kb, done) => {
+    const currentState = options.getState();
+    const waitTimeoutValues = ["0", "30", "60", "300"];
+    const currentWaitTimeout = String(currentState.waitTimeoutSeconds);
+    const availableWaitTimeoutValues = waitTimeoutValues.includes(currentWaitTimeout)
+      ? waitTimeoutValues
+      : [...waitTimeoutValues, currentWaitTimeout].sort((a, b) => Number(a) - Number(b));
 
-  const tokens = prefix.split(/\s+/);
-  if (tokens.length === 1) {
-    return items.filter((item) => item.startsWith(tokens[0] ?? ""));
-  }
+    const items: SettingItem[] = [
+      {
+        id: "capture",
+        label: "Busy input capture",
+        description: "Queue typed input while a managed run is busy.",
+        currentValue: currentState.captureInteractiveInput ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
+        id: "status-line",
+        label: "Status line",
+        description: "Show Copilot Queue in Pi footer. Saved to .pi/settings.json.",
+        currentValue: options.getShowStatusLine() ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
+        id: "wait-timeout",
+        label: "Empty queue wait",
+        description: "How long ask_user waits before returning fallback.",
+        currentValue: currentWaitTimeout,
+        values: availableWaitTimeoutValues,
+      },
+      {
+        id: "autopilot",
+        label: "Autopilot",
+        description: "Use autopilot prompts when the queue is empty.",
+        currentValue: currentState.autopilotEnabled ? "on" : "off",
+        values: ["on", "off"],
+      },
+    ];
 
-  const scope = tokens[0]?.toLowerCase();
-  if (scope === "global" || scope === "project") {
-    return ["set", "off", "clear", "show", "list", "status"].filter((item) =>
-      item.startsWith(tokens[tokens.length - 1] ?? "")
+    const container = new Container();
+    container.addChild(new Text(theme.fg("accent", theme.bold("Copilot Queue Settings")), 1, 0));
+    container.addChild(
+      new Text(
+        theme.fg(
+          "dim",
+          `Managed providers: ${options.getConfiguredProviders().join(", ") || "(disabled)"}`
+        ),
+        1,
+        0
+      )
     );
-  }
+    container.addChild(
+      new Text(
+        theme.fg(
+          "dim",
+          `Use /${EXTENSION_COMMAND} providers ... for routing, /${EXTENSION_COMMAND} fallback ... for fallback text, and /${EXTENSION_COMMAND} autopilot add ... for prompt management.`
+        ),
+        1,
+        0
+      )
+    );
 
-  return items.filter((item) => item.startsWith(tokens[tokens.length - 1] ?? ""));
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 12),
+      getSettingsListTheme(),
+      (id, newValue) => {
+        switch (id) {
+          case "capture":
+            options.onCaptureChange(newValue === "on");
+            break;
+          case "status-line":
+            options.onShowStatusLineChange(newValue === "on");
+            break;
+          case "wait-timeout":
+            options.onWaitTimeoutChange(Number(newValue));
+            break;
+          case "autopilot":
+            options.onAutopilotEnabledChange(newValue === "on");
+            break;
+          default:
+            break;
+        }
+      },
+      () => done(undefined)
+    );
+
+    container.addChild(settingsList);
+    container.addChild(new Text(theme.fg("dim", "↑↓ move • enter/space change • esc close"), 1, 0));
+
+    return {
+      render(width: number) {
+        return container.render(width);
+      },
+      invalidate() {
+        container.invalidate();
+      },
+      handleInput(data: string) {
+        settingsList.handleInput?.(data);
+        tui.requestRender();
+      },
+    };
+  });
 }
 
 function refreshConfiguration(cwd: string = process.cwd()): void {

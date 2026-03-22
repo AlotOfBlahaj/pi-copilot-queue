@@ -64,17 +64,17 @@ void test("registers expected command and tool", () => {
   assert.equal(captured.toolName, TOOL_NAME);
 });
 
-void test("provides completions for provider subcommands", () => {
+void test("provides top-level and nested command completions", () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
   assert.ok(captured.commandCompletions);
 
-  const topLevel = captured.commandCompletions?.("g") ?? [];
-  assert.ok(topLevel.some((item) => item.value === "global"));
+  const topLevel = captured.commandCompletions?.("se") ?? [];
+  assert.ok(topLevel.some((item) => item.value === "settings"));
 
-  const scoped = captured.commandCompletions?.("global o") ?? [];
-  assert.ok(scoped.some((item) => item.value === "off"));
+  const nested = captured.commandCompletions?.("providers global o") ?? [];
+  assert.ok(nested.some((item) => item.value === "providers global off"));
 });
 
 void test("injects ask_user policy for github-copilot", () => {
@@ -718,6 +718,33 @@ void test("uses fallback when queue is empty and no UI", async () => {
 
   assert.equal(result.content[0]?.text, "continue");
   assert.equal(result.details.source, "fallback");
+});
+
+void test("settings command reports a summary without UI", async () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (message?: unknown) => {
+    if (typeof message === "string") {
+      logs.push(message);
+      return;
+    }
+
+    logs.push("");
+  };
+
+  try {
+    assert.ok(captured.commandHandler);
+
+    await captured.commandHandler?.("settings", createCommandCtx(undefined, false));
+
+    assert.ok(logs.some((line) => line.includes("Copilot Queue settings:")));
+    assert.ok(logs.some((line) => line.includes("Status line: on")));
+  } finally {
+    console.log = originalLog;
+  }
 });
 
 void test("providers command updates project settings and managed provider scope", async () => {
