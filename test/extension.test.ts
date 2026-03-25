@@ -78,7 +78,7 @@ void test("provides top-level and nested command completions", () => {
   assert.ok(nested.some((item) => item.value === "providers global off"));
 });
 
-void test("injects ask_user policy into the system prompt without a hidden reminder", () => {
+void test("injects ask_user policy into the system prompt and a hidden reminder", () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
@@ -93,16 +93,81 @@ void test("injects ask_user policy into the system prompt without a hidden remin
   assert.match(result.systemPrompt, /call the ask_user tool/i);
   assert.match(result.systemPrompt, /explicitly replied with stop, end, terminate, or quit/i);
   assert.doesNotMatch(result.systemPrompt, /no more interaction needed/i);
-  assert.equal(result.message, undefined);
+  assert.match(
+    result.message?.content ?? "",
+    /use ask_user instead of ending with a direct assistant reply/i
+  );
 });
 
-void test("does not register a before_provider_request hook", () => {
+void test("forces required tool choice for managed provider payloads when ask_user is present", () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
   const hook = captured.eventHandlers.get("before_provider_request");
+  assert.ok(hook);
 
-  assert.equal(hook, undefined);
+  const result = hook?.(
+    {
+      payload: {
+        tools: [
+          {
+            type: "function",
+            function: { name: TOOL_NAME },
+          },
+        ],
+        tool_choice: "auto",
+      },
+    },
+    { model: { provider: "github-copilot" } }
+  ) as { tool_choice: string };
+
+  assert.equal(result.tool_choice, "required");
+});
+
+void test("does not force tool choice when ask_user is absent", () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const hook = captured.eventHandlers.get("before_provider_request");
+  assert.ok(hook);
+
+  const payload = {
+    tools: [
+      {
+        type: "function",
+        function: { name: "bash" },
+      },
+    ],
+    tool_choice: "auto",
+  };
+
+  const result = hook?.({ payload }, { model: { provider: "github-copilot" } });
+
+  assert.deepEqual(result, payload);
+});
+
+void test("forces anthropic any tool choice for managed provider payloads when ask_user is present", () => {
+  const captured = createCaptured();
+  extension(createPi(captured));
+
+  const hook = captured.eventHandlers.get("before_provider_request");
+  assert.ok(hook);
+
+  const result = hook?.(
+    {
+      payload: {
+        tools: [
+          {
+            name: TOOL_NAME,
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+        ],
+      },
+    },
+    { model: { provider: "github-copilot" } }
+  ) as { tool_choice?: { type?: string } };
+
+  assert.equal(result.tool_choice?.type, "any");
 });
 
 void test("interactive input during active run is queued instead of sent", async () => {
@@ -381,15 +446,18 @@ void test("session status and reset commands work", async () => {
   toolCallHook?.({ toolName: TOOL_NAME }, createToolCtx());
   await captured.commandHandler?.("session status", createCommandCtx(notifications, true));
   assert.ok(notifications.some((line) => line.includes("Session status:")));
-  assert.ok(notifications.some((line) => line.includes("Tool calls: 1")));
+  assert.ok(notifications.some((line) => line.includes("ask_user calls: 1")));
+  assert.ok(notifications.some((line) => line.includes("Other tool calls: 0")));
 
   await captured.commandHandler?.("session reset", createCommandCtx(notifications, true));
   const lastState = captured.entries[captured.entries.length - 1]?.data as {
-    toolCallCount: number;
+    askUserCallCount: number;
+    otherToolCallCount: number;
     completedRunCount: number;
     missedAskUserRunCount: number;
   };
-  assert.equal(lastState.toolCallCount, 0);
+  assert.equal(lastState.askUserCallCount, 0);
+  assert.equal(lastState.otherToolCallCount, 0);
   assert.equal(lastState.completedRunCount, 0);
   assert.equal(lastState.missedAskUserRunCount, 0);
 });
@@ -400,13 +468,16 @@ void test("tracks missed ask_user runs when copilot replies directly", async () 
 
   const notifications: string[] = [];
   const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
+  const toolCallHook = captured.eventHandlers.get("tool_call");
   const agentEndHook = captured.eventHandlers.get("agent_end");
 
   assert.ok(captured.commandHandler);
   assert.ok(beforeAgentStartHook);
+  assert.ok(toolCallHook);
   assert.ok(agentEndHook);
 
   beforeAgentStartHook?.({ systemPrompt: "base prompt" }, createToolCtx({ hasUI: true }));
+  toolCallHook?.({ toolName: "bash" }, createToolCtx({ hasUI: true, notifications }));
   agentEndHook?.(
     {
       messages: [
@@ -422,9 +493,11 @@ void test("tracks missed ask_user runs when copilot replies directly", async () 
   await captured.commandHandler?.("session status", createCommandCtx(notifications, true));
 
   assert.ok(notifications.some((line) => line.includes("Direct replies without ask_user: 1")));
+  assert.ok(notifications.some((line) => line.includes("Last missed run non-ask_user tools: 1")));
   assert.ok(
     notifications.some((line) => line.includes("Last missed direct reply: Here is a direct answer"))
   );
+  assert.ok(notifications.some((line) => line.includes("Non-ask_user tools this run: 1")));
 });
 
 void test("tracks successful runs that used ask_user", async () => {
@@ -462,7 +535,7 @@ void test("tracks successful runs that used ask_user", async () => {
   assert.ok(notifications.some((line) => line.includes("Direct replies without ask_user: 0")));
 });
 
-void test("tool-call warning fires at configurable threshold", async () => {
+void test("ask_user warning fires at configurable threshold", async () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
@@ -478,12 +551,13 @@ void test("tool-call warning fires at configurable threshold", async () => {
 
   assert.ok(
     notifications.some(
-      (line) => line.includes("Session hygiene warning") && line.includes("2 tool calls reached")
+      (line) =>
+        line.includes("Session hygiene warning") && line.includes("2 ask_user calls reached")
     )
   );
 });
 
-void test("session tool-call counter includes non-ask_user tools", async () => {
+void test("session ask_user counter ignores non-ask_user tools", async () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
@@ -496,7 +570,8 @@ void test("session tool-call counter includes non-ask_user tools", async () => {
   toolCallHook?.({ toolName: "bash" }, createToolCtx());
   await captured.commandHandler?.("session status", createCommandCtx(notifications, true));
 
-  assert.ok(notifications.some((line) => line.includes("Tool calls: 1")));
+  assert.ok(notifications.some((line) => line.includes("ask_user calls: 0")));
+  assert.ok(notifications.some((line) => line.includes("Other tool calls: 1")));
 });
 
 void test("does not inject ask_user policy for non-copilot provider", () => {
@@ -778,7 +853,9 @@ void test("settings command reports a summary without UI", async () => {
 
     assert.ok(logs.some((line) => line.includes("Copilot Queue settings:")));
     assert.ok(logs.some((line) => line.includes("Status line: on")));
-    assert.ok(logs.some((line) => line.includes("Warning thresholds: 120 minutes, 50 tool calls")));
+    assert.ok(
+      logs.some((line) => line.includes("Warning thresholds: 120 minutes, 50 ask_user calls"))
+    );
   } finally {
     console.log = originalLog;
     process.chdir(previousCwd);
@@ -837,7 +914,7 @@ void test("settings UI can update warning thresholds", async () => {
   await captured.commandHandler?.(
     "settings",
     createCommandCtx(notifications, true, "github-copilot", undefined, {
-      select: ["Warning thresholds: 120m / 50 tools", "Close"],
+      select: ["Warning thresholds: 120m / 50 ask_user", "Close"],
       input: ["180", "75"],
     })
   );

@@ -9,6 +9,7 @@ import {
 } from "./config.js";
 import {
   COPILOT_ASK_USER_POLICY,
+  COPILOT_ASK_USER_REMINDER_MESSAGE,
   DEFAULT_FALLBACK_RESPONSE,
   DEFAULT_WAIT_TIMEOUT_SECONDS,
   DEFAULT_WARNING_MINUTES,
@@ -32,6 +33,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
   let pendingAskUserResolve: ((text: string) => void) | undefined;
   let currentRunStarted = false;
   let currentRunAskUserCallCount = 0;
+  let currentRunOtherToolCallCount = 0;
 
   function hasPendingAskUser(): boolean {
     return Boolean(pendingAskUserResolve);
@@ -74,6 +76,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     state = restoreFromContext(ctx);
     currentRunStarted = false;
     currentRunAskUserCallCount = 0;
+    currentRunOtherToolCallCount = 0;
     updateStatus(ctx, state, false);
   }
 
@@ -96,10 +99,24 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
 
     currentRunStarted = true;
     currentRunAskUserCallCount = 0;
+    currentRunOtherToolCallCount = 0;
 
     return {
+      message: {
+        customType: `${STATE_ENTRY_TYPE}:policy`,
+        content: buildAskUserReminderMessage(state),
+        display: false,
+      },
       systemPrompt: `${event.systemPrompt}\n\n${COPILOT_ASK_USER_POLICY}`,
     };
+  });
+
+  onBeforeProviderRequest(pi, (event, ctx) => {
+    if (!isManagedProvider(ctx)) {
+      return event.payload;
+    }
+
+    return forceRequiredToolChoice(event.payload);
   });
 
   pi.on("tool_call", (event, ctx) => {
@@ -107,13 +124,17 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       return;
     }
 
-    if (event.toolName === TOOL_NAME) {
+    const isAskUserCall = event.toolName === TOOL_NAME;
+    if (isAskUserCall) {
       currentRunAskUserCallCount += 1;
+    } else {
+      currentRunOtherToolCallCount += 1;
     }
 
     let nextState: QueueState = {
       ...state,
-      toolCallCount: state.toolCallCount + 1,
+      askUserCallCount: state.askUserCallCount + (isAskUserCall ? 1 : 0),
+      otherToolCallCount: state.otherToolCallCount + (isAskUserCall ? 0 : 1),
     };
     nextState = applySessionWarnings(nextState, ctx);
     state = nextState;
@@ -139,6 +160,9 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       lastMissedAssistantReply: missedAskUser
         ? truncateReplyPreview(lastAssistantReply)
         : state.lastMissedAssistantReply,
+      lastMissedOtherToolCallCount: missedAskUser
+        ? currentRunOtherToolCallCount
+        : state.lastMissedOtherToolCallCount,
     };
 
     persistState(pi, state);
@@ -147,7 +171,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     if (missedAskUser) {
       notify(
         ctx,
-        "Copilot Queue: run ended with a direct assistant reply and never called ask_user.",
+        `Copilot Queue: run ended with a direct assistant reply and never called ask_user. Non-ask_user tools this run: ${currentRunOtherToolCallCount}. A stricter reminder will be injected on the next run.`,
         "warning"
       );
     }
@@ -398,7 +422,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
               updateStatus(ctx, state, hasPendingAskUser());
               notify(
                 ctx,
-                `Warning thresholds updated: ${warningMinutes} minutes, ${warningToolCalls} tool calls.`
+                `Warning thresholds updated: ${warningMinutes} minutes, ${warningToolCalls} ask_user calls.`
               );
             },
             onAutopilotEnabledChange: (enabled) => {
@@ -480,12 +504,14 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           state = {
             ...state,
             sessionStartedAt: Date.now(),
-            toolCallCount: 0,
+            askUserCallCount: 0,
+            otherToolCallCount: 0,
             stopRequested: false,
             completedRunCount: 0,
             askUserRunCount: 0,
             missedAskUserRunCount: 0,
             lastMissedAssistantReply: "",
+            lastMissedOtherToolCallCount: 0,
             warnedTime: false,
             warnedToolCalls: false,
           };
@@ -499,7 +525,10 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           const minutes = parsePositiveInt(command.minutes);
           const toolCalls = parsePositiveInt(command.toolCalls);
           if (minutes === undefined || toolCalls === undefined) {
-            notify(ctx, `Usage: /${EXTENSION_COMMAND} session threshold <minutes> <tool-calls>`);
+            notify(
+              ctx,
+              `Usage: /${EXTENSION_COMMAND} session threshold <minutes> <ask-user-calls>`
+            );
             return Promise.resolve();
           }
 
@@ -516,7 +545,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
           updateStatus(ctx, state, hasPendingAskUser());
           notify(
             ctx,
-            `Session warning thresholds updated: ${state.warningMinutes} minutes, ${state.warningToolCalls} tool calls.`
+            `Session warning thresholds updated: ${state.warningMinutes} minutes, ${state.warningToolCalls} ask_user calls.`
           );
           return Promise.resolve();
         }
@@ -651,16 +680,16 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       next = { ...next, warnedTime: true };
       notify(
         ctx,
-        `Session hygiene warning: ${formatElapsed(next)} elapsed. Consider starting a new session after 2-4 hours or around 50 tool calls.`,
+        `Session hygiene warning: ${formatElapsed(next)} elapsed. Consider starting a new session after 2-4 hours or around 50 ask_user calls.`,
         "warning"
       );
     }
 
-    if (!next.warnedToolCalls && next.toolCallCount >= next.warningToolCalls) {
+    if (!next.warnedToolCalls && next.askUserCallCount >= next.warningToolCalls) {
       next = { ...next, warnedToolCalls: true };
       notify(
         ctx,
-        `Session hygiene warning: ${next.toolCallCount} tool calls reached. Consider starting a new session after 2-4 hours or around 50 tool calls.`,
+        `Session hygiene warning: ${next.askUserCallCount} ask_user calls reached. Consider starting a new session after 2-4 hours or around 50 ask_user calls.`,
         "warning"
       );
     }
@@ -691,23 +720,28 @@ function buildSessionStatusText(state: QueueState): string {
   const lastMiss = state.lastMissedAssistantReply
     ? `- Last missed direct reply: ${state.lastMissedAssistantReply}`
     : undefined;
+  const lastMissOther = state.lastMissedAssistantReply
+    ? `- Last missed run non-ask_user tools: ${state.lastMissedOtherToolCallCount}`
+    : undefined;
 
   return [
     `Session status:`,
     `- Managed providers: ${getConfiguredProviderLabel()}`,
     `- Elapsed: ${elapsed}`,
-    `- Tool calls: ${state.toolCallCount}`,
+    `- ask_user calls: ${state.askUserCallCount}`,
+    `- Other tool calls: ${state.otherToolCallCount}`,
     `- Completed managed-provider runs: ${state.completedRunCount}`,
     `- Runs with ask_user: ${state.askUserRunCount}`,
     `- Direct replies without ask_user: ${state.missedAskUserRunCount}`,
     `- ask_user compliance: ${compliance}`,
-    `- Warning thresholds: ${state.warningMinutes} minutes, ${state.warningToolCalls} tool calls`,
+    `- Warning thresholds: ${state.warningMinutes} minutes, ${state.warningToolCalls} ask_user calls`,
     `- Wait timeout: ${state.waitTimeoutSeconds} seconds (0 = disabled)`,
     `- Interactive capture while busy: ${state.captureInteractiveInput ? "on" : "off"}`,
     `- Stop requested: ${state.stopRequested ? "yes" : "no"}`,
     `- Time warning emitted: ${state.warnedTime ? "yes" : "no"}`,
     `- Tool-call warning emitted: ${state.warnedToolCalls ? "yes" : "no"}`,
     lastMiss,
+    lastMissOther,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -746,7 +780,7 @@ function buildSettingsSummaryText(state: QueueState): string {
     `- Status line: ${showStatusLine ? "on" : "off"}`,
     `- Empty-queue wait timeout: ${timeout}`,
     `- Fallback response: ${state.fallbackResponse}`,
-    `- Warning thresholds: ${state.warningMinutes} minutes, ${state.warningToolCalls} tool calls`,
+    `- Warning thresholds: ${state.warningMinutes} minutes, ${state.warningToolCalls} ask_user calls`,
     `- Autopilot: ${state.autopilotEnabled ? "on" : "off"}`,
     `- Autopilot prompts: ${state.autopilotPrompts.length}`,
   ].join("\n");
@@ -777,7 +811,7 @@ async function openSettingsUi(
       `Status line: ${options.getShowStatusLine() ? "on" : "off"}`,
       `Empty-queue wait timeout: ${formatWaitTimeoutLabel(state.waitTimeoutSeconds)}`,
       `Fallback response: ${state.fallbackResponse}`,
-      `Warning thresholds: ${state.warningMinutes}m / ${state.warningToolCalls} tools`,
+      `Warning thresholds: ${state.warningMinutes}m / ${state.warningToolCalls} ask_user`,
       `Autopilot: ${state.autopilotEnabled ? "on" : "off"}`,
       `Autopilot prompts: ${state.autopilotPrompts.length}`,
       "Close",
@@ -961,7 +995,7 @@ async function editWarningThresholdsSetting(
 
   const toolCalls = await promptForPositiveInt(
     ctx,
-    "Warning threshold: tool calls",
+    "Warning threshold: ask_user calls",
     `Current: ${currentToolCalls}`
   );
   if (toolCalls === undefined) {
@@ -1123,6 +1157,144 @@ function truncateReplyPreview(text: string): string {
   return `${singleLine.slice(0, 117)}...`;
 }
 
+function buildAskUserReminderMessage(state: QueueState): string {
+  if (!state.lastMissedAssistantReply) {
+    return COPILOT_ASK_USER_REMINDER_MESSAGE;
+  }
+
+  return [
+    COPILOT_ASK_USER_REMINDER_MESSAGE,
+    "",
+    `Previous managed-provider run missed ask_user and replied directly: ${state.lastMissedAssistantReply}`,
+    `Non-ask_user tools used before that direct reply: ${state.lastMissedOtherToolCallCount}`,
+    "Do not repeat that behavior on this run. Use ask_user instead of replying directly.",
+  ].join("\n");
+}
+
+function onBeforeProviderRequest(
+  pi: ExtensionAPI,
+  handler: (event: { payload: unknown }, ctx: ExtensionContext) => unknown
+): void {
+  const extensionWithDynamicEvents = pi as ExtensionAPI & {
+    on: (event: string, eventHandler: (event: unknown, ctx: ExtensionContext) => unknown) => void;
+  };
+
+  extensionWithDynamicEvents.on("before_provider_request", (event, ctx) => {
+    if (!event || typeof event !== "object" || !("payload" in event)) {
+      return undefined;
+    }
+
+    return handler(event as { payload: unknown }, ctx);
+  });
+}
+
+function forceRequiredToolChoice(payload: unknown): unknown {
+  if (isOpenAiToolChoicePayload(payload)) {
+    if (!payload.tools.some(isAskUserOpenAiTool)) {
+      return payload;
+    }
+
+    const currentToolChoice = payload.tool_choice;
+    if (currentToolChoice === "required") {
+      return payload;
+    }
+
+    if (currentToolChoice && typeof currentToolChoice === "object") {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      tool_choice: "required",
+    };
+  }
+
+  if (isAnthropicToolChoicePayload(payload)) {
+    if (!payload.tools.some(isAskUserAnthropicTool)) {
+      return payload;
+    }
+
+    const currentToolChoice = payload.tool_choice;
+    if (currentToolChoice && typeof currentToolChoice === "object") {
+      const currentType = (currentToolChoice as { type?: unknown }).type;
+      const currentName = (currentToolChoice as { name?: unknown }).name;
+      if (currentType === "any" || (currentType === "tool" && currentName === TOOL_NAME)) {
+        return payload;
+      }
+    }
+
+    return {
+      ...payload,
+      tool_choice: { type: "any" },
+    };
+  }
+
+  return payload;
+}
+
+function isOpenAiToolChoicePayload(payload: unknown): payload is {
+  tools: unknown[];
+  tool_choice?: unknown;
+} {
+  if (!payload || typeof payload !== "object" || !("tools" in payload)) {
+    return false;
+  }
+
+  const tools = (payload as { tools?: unknown }).tools;
+  return Array.isArray(tools) && tools.some(isOpenAiFunctionTool);
+}
+
+function isAnthropicToolChoicePayload(payload: unknown): payload is {
+  tools: unknown[];
+  tool_choice?: unknown;
+} {
+  if (!payload || typeof payload !== "object" || !("tools" in payload)) {
+    return false;
+  }
+
+  const tools = (payload as { tools?: unknown }).tools;
+  return Array.isArray(tools) && tools.some(isAnthropicTool);
+}
+
+function isOpenAiFunctionTool(tool: unknown): boolean {
+  if (!tool || typeof tool !== "object") {
+    return false;
+  }
+
+  return (
+    (tool as { type?: unknown }).type === "function" &&
+    Boolean((tool as { function?: unknown }).function) &&
+    typeof (tool as { function?: { name?: unknown } }).function?.name === "string"
+  );
+}
+
+function isAnthropicTool(tool: unknown): boolean {
+  if (!tool || typeof tool !== "object") {
+    return false;
+  }
+
+  return (
+    typeof (tool as { name?: unknown }).name === "string" &&
+    typeof (tool as { input_schema?: unknown }).input_schema === "object"
+  );
+}
+
+function isAskUserOpenAiTool(tool: unknown): boolean {
+  if (!isOpenAiFunctionTool(tool)) {
+    return false;
+  }
+
+  return (tool as { function: { name: string } }).function.name === TOOL_NAME;
+}
+
+function isAskUserAnthropicTool(tool: unknown): boolean {
+  if (!isAnthropicTool(tool)) {
+    return false;
+  }
+
+  return (tool as { name: string }).name === TOOL_NAME;
+}
+
 async function askManuallyOrFallback(
   prompt: string | undefined,
   ctx: ExtensionContext,
@@ -1215,11 +1387,13 @@ function initialState(): QueueState {
     autopilotPrompts: [],
     autopilotIndex: 0,
     sessionStartedAt: Date.now(),
-    toolCallCount: 0,
+    askUserCallCount: 0,
+    otherToolCallCount: 0,
     completedRunCount: 0,
     askUserRunCount: 0,
     missedAskUserRunCount: 0,
     lastMissedAssistantReply: "",
+    lastMissedOtherToolCallCount: 0,
     warningMinutes: DEFAULT_WARNING_MINUTES,
     warningToolCalls: DEFAULT_WARNING_TOOL_CALLS,
     waitTimeoutSeconds: DEFAULT_WAIT_TIMEOUT_SECONDS,
@@ -1274,7 +1448,8 @@ function formatStatusText(
     const capture = state.captureInteractiveInput ? "capture:on" : "capture:off";
     const waiting = waitingForQueue ? " | waiting:input" : "";
     const misses = state.missedAskUserRunCount > 0 ? ` · miss:${state.missedAskUserRunCount}` : "";
-    const session = `${formatElapsed(state)} · ${state.toolCallCount} tools${misses}`;
+    const other = state.otherToolCallCount > 0 ? ` · other:${state.otherToolCallCount}` : "";
+    const session = `${formatElapsed(state)} · ${state.askUserCallCount} ask_user${other}${misses}`;
     return `${EXTENSION_NAME}: ${state.queue.length} queued${waiting} | ${autopilot} | ${capture} | ${session}`;
   }
 
@@ -1286,7 +1461,10 @@ function formatStatusText(
       ? `${theme.fg("accent", String(state.autopilotPrompts.length))}${theme.fg("dim", " autopilot")}`
       : theme.fg("dim", "autopilot off"),
     theme.fg("dim", `capture ${state.captureInteractiveInput ? "on" : "off"}`),
-    theme.fg("dim", `${formatElapsed(state)} • ${state.toolCallCount} tools`),
+    theme.fg(
+      "dim",
+      `${formatElapsed(state)} • ${state.askUserCallCount} ask_user${state.otherToolCallCount > 0 ? ` • ${state.otherToolCallCount} other` : ""}`
+    ),
   ];
 
   if (waitingForQueue) {
@@ -1324,11 +1502,14 @@ function parseQueueState(value: unknown): QueueState | undefined {
     autopilotPrompts?: unknown;
     autopilotIndex?: unknown;
     sessionStartedAt?: unknown;
+    askUserCallCount?: unknown;
+    otherToolCallCount?: unknown;
     toolCallCount?: unknown;
     completedRunCount?: unknown;
     askUserRunCount?: unknown;
     missedAskUserRunCount?: unknown;
     lastMissedAssistantReply?: unknown;
+    lastMissedOtherToolCallCount?: unknown;
     warningMinutes?: unknown;
     warningToolCalls?: unknown;
     waitTimeoutSeconds?: unknown;
@@ -1367,10 +1548,17 @@ function parseQueueState(value: unknown): QueueState | undefined {
   const sessionStartedAt =
     Number.isFinite(rawStartedAt) && rawStartedAt > 0 ? rawStartedAt : Date.now();
 
-  const rawToolCallCount =
-    typeof candidate.toolCallCount === "number" ? candidate.toolCallCount : 0;
-  const toolCallCount =
-    Number.isInteger(rawToolCallCount) && rawToolCallCount >= 0 ? rawToolCallCount : 0;
+  const rawAskUserCallCount =
+    typeof candidate.askUserCallCount === "number" ? candidate.askUserCallCount : 0;
+  const askUserCallCount =
+    Number.isInteger(rawAskUserCallCount) && rawAskUserCallCount >= 0 ? rawAskUserCallCount : 0;
+
+  const rawOtherToolCallCount =
+    typeof candidate.otherToolCallCount === "number" ? candidate.otherToolCallCount : 0;
+  const otherToolCallCount =
+    Number.isInteger(rawOtherToolCallCount) && rawOtherToolCallCount >= 0
+      ? rawOtherToolCallCount
+      : 0;
 
   const rawCompletedRunCount =
     typeof candidate.completedRunCount === "number" ? candidate.completedRunCount : 0;
@@ -1393,6 +1581,15 @@ function parseQueueState(value: unknown): QueueState | undefined {
     typeof candidate.lastMissedAssistantReply === "string"
       ? candidate.lastMissedAssistantReply
       : "";
+
+  const rawLastMissedOtherToolCallCount =
+    typeof candidate.lastMissedOtherToolCallCount === "number"
+      ? candidate.lastMissedOtherToolCallCount
+      : 0;
+  const lastMissedOtherToolCallCount =
+    Number.isInteger(rawLastMissedOtherToolCallCount) && rawLastMissedOtherToolCallCount >= 0
+      ? rawLastMissedOtherToolCallCount
+      : 0;
 
   const rawWarningMinutes =
     typeof candidate.warningMinutes === "number"
@@ -1434,11 +1631,13 @@ function parseQueueState(value: unknown): QueueState | undefined {
     autopilotPrompts,
     autopilotIndex,
     sessionStartedAt,
-    toolCallCount,
+    askUserCallCount,
+    otherToolCallCount,
     completedRunCount,
     askUserRunCount,
     missedAskUserRunCount,
     lastMissedAssistantReply,
+    lastMissedOtherToolCallCount,
     warningMinutes,
     warningToolCalls,
     waitTimeoutSeconds,

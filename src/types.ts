@@ -7,11 +7,13 @@ export interface QueueState {
   autopilotPrompts: string[];
   autopilotIndex: number;
   sessionStartedAt: number;
-  toolCallCount: number;
+  askUserCallCount: number;
+  otherToolCallCount: number;
   completedRunCount: number;
   askUserRunCount: number;
   missedAskUserRunCount: number;
   lastMissedAssistantReply: string;
+  lastMissedOtherToolCallCount: number;
   warningMinutes: number;
   warningToolCalls: number;
   waitTimeoutSeconds: number;
