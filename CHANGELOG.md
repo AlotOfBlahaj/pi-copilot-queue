@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.2](https://github.com/ayagmar/pi-copilot-queue/compare/v0.7.1...v0.7.2) (2026-03-26)
+
+### Bug Fixes
+
+* restore ask_user enforcement and release workflow ([bf28db8](https://github.com/ayagmar/pi-copilot-queue/commit/bf28db86839799868bee926f584525b765801c63))
+
 ## [0.7.1](https://github.com/ayagmar/pi-copilot-queue/compare/v0.7.0...v0.7.1) (2026-03-22)
 
 ### Bug Fixes
