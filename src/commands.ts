@@ -80,7 +80,7 @@ export function buildHelpText(): string {
     `/${EXTENSION_COMMAND} autopilot clear`,
     `/${EXTENSION_COMMAND} session status`,
     `/${EXTENSION_COMMAND} session reset`,
-    `/${EXTENSION_COMMAND} session threshold <minutes> <tool-calls>`,
+    `/${EXTENSION_COMMAND} session threshold <minutes> <ask-user-calls>`,
     `/${EXTENSION_COMMAND} wait-timeout <seconds>`,
     `/${EXTENSION_COMMAND} help`,
   ].join("\n");
