@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import extension from "../src/index.js";
-import { EXTENSION_COMMAND, TOOL_NAME } from "../src/constants.js";
+import { EXTENSION_COMMAND, STATE_ENTRY_TYPE, TOOL_NAME } from "../src/constants.js";
 
 interface Captured {
   commandName?: string;
@@ -359,7 +359,7 @@ void test("stop command makes the next ask_user return stop", async () => {
   assert.equal(result.details.source, "stop");
 });
 
-void test("stop and done suppress ask_user policy on the next managed-provider run", async () => {
+void test("stop and done suppress ask_user policy until rearmed", async () => {
   for (const command of ["stop", "done"] as const) {
     const captured = createCaptured();
     extension(createPi(captured));
@@ -367,47 +367,73 @@ void test("stop and done suppress ask_user policy on the next managed-provider r
     const notifications: string[] = [];
     const beforeAgentStartHook = captured.eventHandlers.get("before_agent_start");
     const beforeProviderRequestHook = captured.eventHandlers.get("before_provider_request");
+    const contextHook = captured.eventHandlers.get("context");
     const agentEndHook = captured.eventHandlers.get("agent_end");
 
     assert.ok(captured.commandHandler);
     assert.ok(beforeAgentStartHook);
     assert.ok(beforeProviderRequestHook);
+    assert.ok(contextHook);
     assert.ok(agentEndHook);
 
     await captured.commandHandler?.(command, createCommandCtx());
 
-    const beforeAgentStartResult = beforeAgentStartHook?.(
-      { systemPrompt: "base prompt" },
-      createToolCtx({ hasUI: true, notifications })
-    );
-    assert.equal(beforeAgentStartResult, undefined);
+    for (let turn = 0; turn < 2; turn += 1) {
+      const beforeAgentStartResult: unknown = beforeAgentStartHook?.(
+        { systemPrompt: "base prompt" },
+        createToolCtx({ hasUI: true, notifications })
+      );
+      assert.equal(beforeAgentStartResult, undefined);
 
-    const payload = {
-      tools: [
+      const contextResult = contextHook?.(
         {
-          type: "function",
-          function: { name: TOOL_NAME },
+          messages: [
+            {
+              customType: `${STATE_ENTRY_TYPE}:policy`,
+              content: "Copilot Queue protocol reminder:",
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "nice" }],
+            },
+          ],
         },
-      ],
-      tool_choice: "auto",
-    };
-    const providerRequestResult = beforeProviderRequestHook?.(
-      { payload },
-      createToolCtx({ hasUI: true, notifications })
-    );
-    assert.deepEqual(providerRequestResult, payload);
+        createToolCtx({ hasUI: true, notifications })
+      ) as { messages: { customType?: string }[] };
+      assert.deepEqual(contextResult.messages, [
+        {
+          role: "user",
+          content: [{ type: "text", text: "nice" }],
+        },
+      ]);
 
-    agentEndHook?.(
-      {
-        messages: [
+      const payload = {
+        tools: [
           {
-            role: "assistant",
-            content: [{ type: "text", text: "Yes." }],
+            type: "function",
+            function: { name: TOOL_NAME },
           },
         ],
-      },
-      createToolCtx({ hasUI: true, notifications })
-    );
+        tool_choice: "auto",
+      };
+      const providerRequestResult: unknown = beforeProviderRequestHook?.(
+        { payload },
+        createToolCtx({ hasUI: true, notifications })
+      );
+      assert.deepEqual(providerRequestResult, payload);
+
+      agentEndHook?.(
+        {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Yes." }],
+            },
+          ],
+        },
+        createToolCtx({ hasUI: true, notifications })
+      );
+    }
 
     assert.ok(
       notifications.every(

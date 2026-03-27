@@ -190,7 +190,7 @@ You can also manage the global settings from inside Pi:
 
 Both commands request an explicit stop. If `ask_user` is currently waiting, it is released with `stop`. Otherwise the next `ask_user` call will immediately receive `stop`.
 
-After an explicit stop, the next managed-provider run is treated as a normal direct-reply turn. If you queue a new message or enable autopilot before that run, the `ask_user` loop is armed again immediately.
+After an explicit stop, managed-provider runs stay in normal direct-reply mode until you queue a new message or enable autopilot. That re-arms the `ask_user` loop immediately.
 
 ### Quick settings UI
 

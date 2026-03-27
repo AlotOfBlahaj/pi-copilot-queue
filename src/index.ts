@@ -23,6 +23,7 @@ import { notifyTerminal } from "./notify.js";
 import type { QueueState } from "./types.js";
 
 const STOP_RESPONSE = "stop";
+const POLICY_MESSAGE_TYPE = `${STATE_ENTRY_TYPE}:policy`;
 let configuredProviders: string[] = [];
 let showStatusLine = true;
 
@@ -94,6 +95,25 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
     updateStatus(ctx, state, hasPendingAskUser());
   });
 
+  pi.on("context", (event, ctx) => {
+    if (!isManagedProvider(ctx)) {
+      return;
+    }
+
+    const latestPolicyMessageIndex = state.skipAskUserPolicyOnce
+      ? -1
+      : findLatestPolicyMessageIndex(event.messages);
+    const filteredMessages = event.messages.filter(
+      (message, index) => !isPolicyMessage(message) || index === latestPolicyMessageIndex
+    );
+
+    if (filteredMessages.length === event.messages.length) {
+      return;
+    }
+
+    return { messages: filteredMessages };
+  });
+
   pi.on("before_agent_start", (event, ctx) => {
     if (!isManagedProvider(ctx)) {
       return;
@@ -104,8 +124,6 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       currentRunAskUserSuppressed = true;
       currentRunAskUserCallCount = 0;
       currentRunOtherToolCallCount = 0;
-      state = { ...state, skipAskUserPolicyOnce: false };
-      persistState(pi, state);
       updateStatus(ctx, state, hasPendingAskUser());
       return;
     }
@@ -117,7 +135,7 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
 
     return {
       message: {
-        customType: `${STATE_ENTRY_TYPE}:policy`,
+        customType: POLICY_MESSAGE_TYPE,
         content: buildAskUserReminderMessage(state),
         display: false,
       },
@@ -1226,6 +1244,24 @@ function buildAskUserReminderMessage(state: QueueState): string {
     `Non-ask_user tools used before that direct reply: ${state.lastMissedOtherToolCallCount}`,
     "Do not repeat that behavior on this run. Use ask_user instead of replying directly.",
   ].join("\n");
+}
+
+function findLatestPolicyMessageIndex(messages: unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isPolicyMessage(messages[i])) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function isPolicyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+
+  return (message as { customType?: unknown }).customType === POLICY_MESSAGE_TYPE;
 }
 
 function onBeforeProviderRequest(
