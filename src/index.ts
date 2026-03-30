@@ -714,6 +714,17 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
       }
 
       if (!ctx.hasUI) {
+        // 检测是否在 subagent 中运行
+        if (isInSubagent()) {
+          const SUBAGENT_DISABLED_MESSAGE =
+            "[pi-copilot-queue] ask_user is disabled in subagent mode. " +
+            "The subagent cannot interact with the user queue. " +
+            "Please return a result directly instead of calling ask_user.";
+          return {
+            content: [{ type: "text" as const, text: SUBAGENT_DISABLED_MESSAGE }],
+            details: { source: "disabled_in_subagent", remaining: 0 },
+          };
+        }
         return {
           content: [{ type: "text" as const, text: state.fallbackResponse }],
           details: { source: "fallback", remaining: 0 },
@@ -1400,6 +1411,12 @@ function isAskUserAnthropicTool(tool: unknown): boolean {
   }
 
   return (tool as { name: string }).name === TOOL_NAME;
+}
+
+function isInSubagent(): boolean {
+  // pi-subagents 使用 Symbol.for("pi-subagents:manager") 暴露 manager
+  const SUBAGENT_MANAGER_KEY = Symbol.for("pi-subagents:manager");
+  return (globalThis as Record<symbol, unknown>)[SUBAGENT_MANAGER_KEY] !== undefined;
 }
 
 async function askManuallyOrFallback(
