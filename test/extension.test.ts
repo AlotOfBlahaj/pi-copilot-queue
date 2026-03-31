@@ -78,7 +78,7 @@ void test("provides top-level and nested command completions", () => {
   assert.ok(nested.some((item) => item.value === "providers global off"));
 });
 
-void test("injects ask_user policy into the system prompt and a hidden reminder", () => {
+void test("injects ask_user reminder as a hidden message", () => {
   const captured = createCaptured();
   extension(createPi(captured));
 
@@ -88,15 +88,12 @@ void test("injects ask_user policy into the system prompt and a hidden reminder"
   const result = hook?.(
     { systemPrompt: "base prompt" },
     { model: { provider: "github-copilot" } }
-  ) as { systemPrompt: string; message?: { content: string } };
+  ) as { message?: { content: string } };
 
-  assert.match(result.systemPrompt, /call the ask_user tool/i);
-  assert.match(result.systemPrompt, /explicitly replied with stop, end, terminate, or quit/i);
-  assert.doesNotMatch(result.systemPrompt, /no more interaction needed/i);
-  assert.match(
-    result.message?.content ?? "",
-    /use ask_user instead of ending with a direct assistant reply/i
-  );
+  // Should NOT modify systemPrompt anymore - only use custom message
+  assert.equal(result.systemPrompt, undefined);
+  // Should inject a hidden message with ask_user reminder
+  assert.match(result.message?.content ?? "", /call ask_user after each completed step/i);
 });
 
 void test("forces required tool choice for managed provider payloads when ask_user is present", () => {
@@ -465,12 +462,13 @@ void test("new queued input clears a pending stop request", async () => {
     createToolCtx()
   )) as { content: { type: string; text: string }[]; details: { source: string } };
   const nextRun = beforeAgentStartHook?.({ systemPrompt: "base prompt" }, createToolCtx()) as {
-    systemPrompt: string;
+    message?: { content: string };
   };
 
   assert.equal(result.content[0]?.text, "continue instead");
   assert.equal(result.details.source, "queue");
-  assert.match(nextRun.systemPrompt, /call the ask_user tool/i);
+  // Should inject reminder message (no longer modifies systemPrompt)
+  assert.match(nextRun.message?.content ?? "", /call ask_user after each completed step/i);
 });
 
 void test("wait timeout returns fallback when no queued input arrives", async () => {
@@ -1103,9 +1101,9 @@ void test("providers command updates global settings and managed provider scope"
     const afterUpdate = beforeAgentStartHook?.(
       { systemPrompt: "base prompt" },
       createToolCtx({ provider: "openai" })
-    ) as { systemPrompt: string } | undefined;
+    ) as { message?: { content: string } } | undefined;
     assert.ok(afterUpdate);
-    assert.match(afterUpdate.systemPrompt, /call the ask_user tool/i);
+    assert.match(afterUpdate.message?.content ?? "", /call ask_user after each completed step/i);
   } finally {
     process.chdir(previousCwd);
     if (previousHome === undefined) {
@@ -1152,9 +1150,9 @@ void test("providers command still accepts the global prefix", async () => {
     const afterUpdate = beforeAgentStartHook?.(
       { systemPrompt: "base prompt" },
       createToolCtx({ provider: "openai" })
-    ) as { systemPrompt: string } | undefined;
+    ) as { message?: { content: string } } | undefined;
     assert.ok(afterUpdate);
-    assert.match(afterUpdate.systemPrompt, /call the ask_user tool/i);
+    assert.match(afterUpdate.message?.content ?? "", /call ask_user after each completed step/i);
   } finally {
     process.chdir(previousCwd);
     if (previousHome === undefined) {

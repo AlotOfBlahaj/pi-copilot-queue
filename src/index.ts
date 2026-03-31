@@ -8,7 +8,6 @@ import {
   writeShowStatusLine,
 } from "./config.js";
 import {
-  COPILOT_ASK_USER_POLICY,
   COPILOT_ASK_USER_REMINDER_MESSAGE,
   DEFAULT_FALLBACK_RESPONSE,
   DEFAULT_WAIT_TIMEOUT_SECONDS,
@@ -139,7 +138,6 @@ export default function copilotQueueExtension(pi: ExtensionAPI) {
         content: buildAskUserReminderMessage(state),
         display: false,
       },
-      systemPrompt: `${event.systemPrompt}\n\n${COPILOT_ASK_USER_POLICY}`,
     };
   });
 
